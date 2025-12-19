@@ -4,5 +4,6 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
+    <ApplicationIcon>assets\telegram-manager.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
