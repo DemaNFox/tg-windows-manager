@@ -18,6 +18,8 @@ namespace TelegramTrayLauncher
             public string? Scale { get; set; }
             public bool TemplatesEnabled { get; set; } = true;
             public List<TemplateSetting> Templates { get; set; } = new List<TemplateSetting>();
+            public List<AccountGroup> AccountGroups { get; set; } = new List<AccountGroup>();
+            public Dictionary<string, AccountState> AccountStates { get; set; } = new Dictionary<string, AccountState>(StringComparer.OrdinalIgnoreCase);
         }
 
         public Settings Load()
@@ -61,8 +63,62 @@ namespace TelegramTrayLauncher
         {
             settings ??= new Settings();
             settings.Templates ??= new List<TemplateSetting>();
+            settings.AccountGroups ??= new List<AccountGroup>();
+            settings.AccountStates ??= new Dictionary<string, AccountState>(StringComparer.OrdinalIgnoreCase);
             EnsureDefaultTemplate(settings.Templates);
+            NormalizeAccountGroups(settings.AccountGroups);
+            NormalizeAccountStates(settings.AccountStates);
             return settings;
+        }
+
+        private static void NormalizeAccountGroups(List<AccountGroup> groups)
+        {
+            var unique = new Dictionary<string, AccountGroup>(StringComparer.OrdinalIgnoreCase);
+            foreach (var group in groups)
+            {
+                if (group == null)
+                {
+                    continue;
+                }
+
+                var name = (group.Name ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    continue;
+                }
+
+                if (!unique.ContainsKey(name))
+                {
+                    unique[name] = new AccountGroup { Name = name };
+                }
+            }
+
+            groups.Clear();
+            groups.AddRange(unique.Values);
+        }
+
+        private static void NormalizeAccountStates(Dictionary<string, AccountState> states)
+        {
+            var normalized = new Dictionary<string, AccountState>(StringComparer.OrdinalIgnoreCase);
+            foreach (var pair in states)
+            {
+                var key = pair.Key;
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    continue;
+                }
+
+                var state = pair.Value ?? new AccountState();
+                var groupName = state.GroupName;
+                state.GroupName = string.IsNullOrWhiteSpace(groupName) ? null : groupName.Trim();
+                normalized[key.Trim()] = state;
+            }
+
+            states.Clear();
+            foreach (var pair in normalized)
+            {
+                states[pair.Key] = pair.Value;
+            }
         }
 
         private static void EnsureDefaultTemplate(List<TemplateSetting> templates)
