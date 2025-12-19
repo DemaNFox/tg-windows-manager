@@ -1,0 +1,34 @@
+# Build outputs
+bin/
+obj/
+.env
+
+# VS/IDE
+.vs/
+*.user
+*.userosscache
+*.suo
+*.ide
+*.njsproj.user
+
+# Logs / temp
+*.log
+*.tmp
+*.tmp.*
+*.bak
+
+# OS
+Thumbs.db
+Desktop.ini
+
+# Rider/JetBrains
+.idea/
+
+# Publish artifacts
+*.publishsettings
+
+# Dotnet tooling
+.dotnet/
+.nuget/
+.vscode/
+launchSettings.json
