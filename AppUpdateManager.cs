@@ -315,6 +315,7 @@ Start-Process -FilePath (Join-Path $Target $Exe)
 
     internal sealed class AppUpdateConfig
     {
+        private const string ConfigFileName = "app_update.json";
         public string? RepoOwner { get; set; }
         public string? RepoName { get; set; }
         public string? AssetName { get; set; }
