@@ -7,3 +7,4 @@
 - Соблюдай существующую структуру: точка входа (`Program.cs`), треевый UI (`TrayAppContext.cs`), процессы (`TelegramProcessManager.cs`), оверлеи (`OverlayManager.cs` + `WindowOverlay.cs`), P/Invoke (`NativeMethods.cs`), иконка (`IconFactory.cs`), базовая папка (`BaseDirectoryResolver.cs`).
 - Ресурсы: иконка приложения в `assets/telegram-manager.ico` (указана как ApplicationIcon в csproj).
 - Настройки: `SettingsStore.cs` хранит (в `%APPDATA%/TelegramManager/settings.json`) масштаб `-scale`, используемый при запуске аккаунтов; обновляй описание при добавлении новых параметров.
+- Не комить без явного разрешения пользователя.
