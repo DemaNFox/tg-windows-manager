@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -14,6 +15,9 @@ namespace TelegramTrayLauncher
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_SYSKEYDOWN = 0x0104;
+        private const int DefaultVariantCount = 200;
+        private const int MaxVariantLength = 120;
+        private const string CompanyPlaceholder = "{\u043a\u043e\u043c\u043f\u0430\u043d\u0438\u044f}";
 
         private readonly Action<string> _log;
         private readonly SynchronizationContext _uiContext;
@@ -34,7 +38,7 @@ namespace TelegramTrayLauncher
         {
             _log = log;
             _uiContext = uiContext;
-            _defaultVariants = BuildDefaultVariants();
+            _defaultVariants = BuildDefaultVariants(DefaultVariantCount);
         }
 
         public void Configure(IEnumerable<TemplateSetting> templates, bool enabled)
@@ -101,7 +105,7 @@ namespace TelegramTrayLauncher
             var hook = SetWindowsHookEx(WH_KEYBOARD_LL, proc, handle, 0);
             if (hook == IntPtr.Zero)
             {
-                _log("РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ РіР»РѕР±Р°Р»СЊРЅС‹Р№ С…СѓРє РєР»Р°РІРёР°С‚СѓСЂС‹ РґР»СЏ С€Р°Р±Р»РѕРЅРѕРІ.");
+                _log("Не удалось установить глобальный хук клавиатуры для шаблонов.");
             }
 
             return hook;
@@ -134,7 +138,7 @@ namespace TelegramTrayLauncher
                         _pendingTemplate = null;
                         shouldSend = true;
                         removeKeyStroke = true;
-                        // РїРѕРґР°РІР»СЏРµРј Tab, С‡С‚РѕР±С‹ РЅРµ Р±С‹Р»Рѕ РїРµСЂРµРєР»СЋС‡РµРЅРёСЏ С„РѕРєСѓСЃР°
+                        // подавляем Tab, чтобы не было переключения фокуса
                         suppressKey = true;
                     }
                     else if (_awaitingDefaultReplacement && key == Keys.Tab)
@@ -150,9 +154,9 @@ namespace TelegramTrayLauncher
                         if (matched != null)
                         {
                             _pendingTemplate = matched;
-                            _log($"РЁР°Р±Р»РѕРЅ \"{matched}\" РїРѕРґРіРѕС‚РѕРІР»РµРЅ. РќР°Р¶РјРёС‚Рµ Tab РґР»СЏ РІСЃС‚Р°РІРєРё.");
-                            // РЅРµ РіР»СѓС€РёРј РёСЃС…РѕРґРЅСѓСЋ РєР»Р°РІРёС€Сѓ, С‡С‚РѕР±С‹ РµС‘ РјРѕР¶РЅРѕ Р±С‹Р»Рѕ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РєР°Рє РѕР±С‹С‡РЅРѕ;
-                            // РїСЂРё РІСЃС‚Р°РІРєРµ С€Р°Р±Р»РѕРЅР° СѓРґР°Р»РёРј РІРІРµРґРµРЅРЅС‹Р№ СЃРёРјРІРѕР».
+                            _log($"Шаблон \"{matched}\" подготовлен. Нажмите Tab для вставки.");
+                            // не глушим исходную клавишу, чтобы её можно было использовать как обычно;
+                            // при вставке шаблона удалим введенный символ.
                         }
                     }
                 }
@@ -206,13 +210,13 @@ namespace TelegramTrayLauncher
                     }
                     catch (Exception ex)
                     {
-                        _log("РћС€РёР±РєР° РѕС‚РїСЂР°РІРєРё С€Р°Р±Р»РѕРЅР°: " + ex.Message);
+                        _log("Ошибка отправки шаблона: " + ex.Message);
                     }
                 }, null);
             }
             catch (Exception ex)
             {
-                _log("РћС€РёР±РєР° РїР»Р°РЅРёСЂРѕРІР°РЅРёСЏ РѕС‚РїСЂР°РІРєРё С€Р°Р±Р»РѕРЅР°: " + ex.Message);
+                _log("Ошибка планирования отправки шаблона: " + ex.Message);
             }
         }
 
@@ -274,14 +278,14 @@ namespace TelegramTrayLauncher
                     }
                     catch (Exception ex)
                     {
-                        _log("РћС€РёР±РєР° Р·Р°РјРµРЅС‹ С€Р°Р±Р»РѕРЅР°: " + ex.Message);
+                        _log("Ошибка замены шаблона: " + ex.Message);
                         _awaitingDefaultReplacement = false;
                     }
                 }, null);
             }
             catch (Exception ex)
             {
-                _log("РћС€РёР±РєР° РїР»Р°РЅРёСЂРѕРІР°РЅРёСЏ Р·Р°РјРµРЅС‹ С€Р°Р±Р»РѕРЅР°: " + ex.Message);
+                _log("Ошибка планирования замены шаблона: " + ex.Message);
                 _awaitingDefaultReplacement = false;
             }
         }
@@ -306,105 +310,159 @@ namespace TelegramTrayLauncher
             return candidate;
         }
 
-        private static List<string> BuildDefaultVariants()
+        private List<string> BuildDefaultVariants(int count = DefaultVariantCount, bool filterNearDuplicates = true)
         {
             var greetings = new[]
             {
-                "Привет",
-                "Привет!",
-                "Привет,",
-                "Приветик",
-                "Добрый день",
-                "Добрый!",
-                "Хей",
-                "Йо",
-                "Доброе утро",
-                "Добрый вечер",
-                "Приветствую",
-                "Хай",
-                "Доброго дня",
-                "Доброго",
-                "Привет, пожалуйста",
-                "Привет, напомни",
-                "Приветики",
-                "Хэй",
-                "Приветствую,",
-                "Привет-привет"
+                "\u041f\u0440\u0438\u0432\u0435\u0442",
             };
 
-            var requests = new[]
+            var verbs = new[]
             {
-                "скинь пожалуйста карточку компании",
-                "кинь, пожалуйста, карточку компании",
-                "передай карточку компании",
-                "поделись карточкой компании",
-                "можешь отправить карточку компании",
-                "сбрось карточку компании",
-                "скинь карточку компании",
-                "сможешь прислать карточку компании",
-                "дай, пожалуйста, карточку компании",
-                "отправь карточку компании",
-                "подкинь карточку компании",
-                "скинь карточку по компании",
-                "пришли карточку компании",
-                "подели карточку компании",
-                "ссылку на карточку компании пришли",
-                "скинь файл карточки компании",
-                "кинь карточку компании сюда",
-                "поделись карточкой по компании",
-                "отправь, пожалуйста, карточку компании",
-                "сможешь кинуть карточку компании"
+                "\u0441\u043a\u0438\u043d\u044c",
+                "\u043f\u0440\u0438\u0448\u043b\u0438",
+                "\u043e\u0442\u043f\u0440\u0430\u0432\u044c",
+                "\u043f\u0435\u0440\u0435\u0448\u043b\u0438",
+                "\u0437\u0430\u043a\u0438\u043d\u044c",
+                "\u043c\u043e\u0436\u0435\u0448\u044c \u0441\u043a\u0438\u043d\u0443\u0442\u044c",
+                "\u043c\u043e\u0436\u0435\u0448\u044c \u043f\u0440\u0438\u0441\u043b\u0430\u0442\u044c",
+                "\u043f\u0440\u0438\u0448\u043b\u0435\u0448\u044c",
+                "\u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0448\u044c",
             };
 
-            var placeholders = new[]
+            var objects = new[]
             {
-                "(компания)",
-                "по (компания)",
-                "для (компания)",
-                "о (компания)",
-                "про (компания)"
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u043f\u043e \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u0444\u0438\u0440\u043c\u044b " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0446\u0438\u0438 " + CompanyPlaceholder,
+                "\u0434\u0430\u043d\u043d\u044b\u0435 \u043f\u043e \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
+                "\u0438\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044e \u043f\u043e \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
+                "\u043f\u0440\u043e\u0444\u0438\u043b\u044c \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u043a\u043e\u043d\u0442\u0440\u0430\u0433\u0435\u043d\u0442\u0430 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u044e\u0440\u043b\u0438\u0446\u0430 " + CompanyPlaceholder,
             };
 
-            var endings = new[]
+            var objectsNeedFeminine = new[]
             {
-                "не могу найти",
-                "не нашел",
-                "не удалось найти",
-                "что-то не вижу её",
-                "у себя не нахожу",
-                "пропала у меня",
-                "не попадается под руку",
-                "потерял её",
-                "в переписке не вижу",
-                "куда-то делась",
-                "в поиске не появляется",
-                "никак не найду",
-                "затерял её",
-                "не вижу у себя",
-                "поиск не находит",
-                "в папке не нашел",
-                "не получается найти",
-                "не находится",
-                "не вижу в чатах",
-                "не получается обнаружить"
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430 \u043f\u043e \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430 \u0444\u0438\u0440\u043c\u044b " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430 \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0446\u0438\u0438 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430 \u043a\u043e\u043d\u0442\u0440\u0430\u0433\u0435\u043d\u0442\u0430 " + CompanyPlaceholder,
+                "\u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430 \u044e\u0440\u043b\u0438\u0446\u0430 " + CompanyPlaceholder,
+                "\u0438\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f \u043f\u043e \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
             };
 
-            var variants = new List<string>(220)
+            var objectsNeedPlural = new[]
             {
-                TemplateDefaults.DefaultText
+                "\u0434\u0430\u043d\u043d\u044b\u0435 \u043f\u043e \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 " + CompanyPlaceholder,
             };
-            foreach (var greet in greetings)
+
+            var reasons = new[]
             {
-                foreach (var req in requests)
+                "\u043d\u0435 \u043c\u043e\u0433\u0443 \u043d\u0430\u0439\u0442\u0438",
+                "\u043d\u0435 \u043d\u0430\u0448\u0435\u043b",
+                "\u043d\u0435 \u043d\u0430\u0445\u043e\u0436\u0443",
+                "\u043d\u0435 \u043f\u043e\u043b\u0443\u0447\u0430\u0435\u0442\u0441\u044f \u043d\u0430\u0439\u0442\u0438",
+                "\u043d\u0435 \u0432\u0438\u0436\u0443",
+                "\u043f\u043e\u0442\u0435\u0440\u044f\u043b",
+                "\u043d\u0435\u0442 \u043f\u043e\u0434 \u0440\u0443\u043a\u043e\u0439",
+                "\u043d\u0435 \u043f\u043e\u0434 \u0440\u0443\u043a\u043e\u0439",
+                "\u043d\u0435 \u0432\u0438\u0436\u0443 \u0432 \u043f\u0435\u0440\u0435\u043f\u0438\u0441\u043a\u0435",
+                "\u043d\u0435 \u043d\u0430\u0448\u0435\u043b \u0443 \u0441\u0435\u0431\u044f",
+                "\u043d\u0435 \u043c\u043e\u0433\u0443 \u0431\u044b\u0441\u0442\u0440\u043e \u043d\u0430\u0439\u0442\u0438",
+            };
+
+            var reasonsShort = new[]
+            {
+                "\u043d\u0435 \u043c\u043e\u0433\u0443 \u043d\u0430\u0439\u0442\u0438",
+                "\u043d\u0435 \u0432\u0438\u0436\u0443",
+                "\u043d\u0435 \u043d\u0430\u0445\u043e\u0436\u0443",
+                "\u043d\u0435\u0442 \u043f\u043e\u0434 \u0440\u0443\u043a\u043e\u0439",
+                "\u043d\u0435 \u043f\u043e\u0434 \u0440\u0443\u043a\u043e\u0439",
+                "\u043d\u0435 \u043c\u043e\u0433\u0443 \u0431\u044b\u0441\u0442\u0440\u043e \u043d\u0430\u0439\u0442\u0438",
+            };
+
+            var templates = new List<TemplateSpec>
+            {
+                new TemplateSpec("{greeting}, {verb} {obj}, {reason}", true, ObjectKind.Accusative, ReasonKind.Full, false),
+                new TemplateSpec("{greeting}, {verb} {obj} \u2014 {reason}", true, ObjectKind.Accusative, ReasonKind.Full, false),
+                new TemplateSpec("{greeting}, {verb} {obj}. {reason_cap}", true, ObjectKind.Accusative, ReasonKind.Full, true),
+                new TemplateSpec("{greeting}, {verb} {obj}? {reason_cap}", true, ObjectKind.Accusative, ReasonKind.Full, true),
+                new TemplateSpec("{greeting} {verb} {obj}, {reason}", true, ObjectKind.Accusative, ReasonKind.Full, false),
+                new TemplateSpec("{greeting} {verb} {obj} \u2014 {reason}", true, ObjectKind.Accusative, ReasonKind.Full, false),
+                new TemplateSpec("{greeting} {verb} {obj}. {reason_cap}", true, ObjectKind.Accusative, ReasonKind.Full, true),
+                new TemplateSpec("{greeting}, {obj} {verb}, {reason}", true, ObjectKind.Accusative, ReasonKind.Full, false),
+                new TemplateSpec("{greeting}, {obj} {verb}. {reason_cap}", true, ObjectKind.Accusative, ReasonKind.Full, true),
+                new TemplateSpec("{greeting}, {obj} {verb}? {reason_cap}", true, ObjectKind.Accusative, ReasonKind.Full, true),
+                new TemplateSpec("{greeting}, \u043d\u0443\u0436\u043d\u0430 {obj_need}, {reason}", false, ObjectKind.NeedFeminine, ReasonKind.Full, false),
+                new TemplateSpec("{greeting}, \u043d\u0443\u0436\u043d\u0430 {obj_need}. {reason_cap}", false, ObjectKind.NeedFeminine, ReasonKind.Full, true),
+                new TemplateSpec("{greeting}, \u043d\u0443\u0436\u043d\u044b {obj_need_plural}, {reason}", false, ObjectKind.NeedPlural, ReasonKind.Full, false),
+                new TemplateSpec("{greeting}, {verb} {obj}, {reason}", true, ObjectKind.Accusative, ReasonKind.Short, false),
+                new TemplateSpec("{greeting} {verb} {obj}. {reason_cap}", true, ObjectKind.Accusative, ReasonKind.Short, true),
+            };
+
+            int theoreticalTotal = 0;
+            foreach (var template in templates)
+            {
+                int verbCount = template.UseVerb ? verbs.Length : 1;
+                int objectCount = template.ObjectKind switch
                 {
-                    foreach (var placeholder in placeholders)
+                    ObjectKind.Accusative => objects.Length,
+                    ObjectKind.NeedFeminine => objectsNeedFeminine.Length,
+                    ObjectKind.NeedPlural => objectsNeedPlural.Length,
+                    _ => 0
+                };
+                int reasonCount = template.ReasonKind == ReasonKind.Short ? reasonsShort.Length : reasons.Length;
+                theoreticalTotal += greetings.Length * verbCount * objectCount * reasonCount;
+            }
+
+            var variants = new List<string>(Math.Min(count * 3, 10000));
+            var seenExact = new HashSet<string>(StringComparer.Ordinal);
+            var seenNear = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var template in templates)
+            {
+                var verbSource = template.UseVerb ? verbs : new[] { string.Empty };
+                var objectSource = template.ObjectKind switch
+                {
+                    ObjectKind.Accusative => objects,
+                    ObjectKind.NeedFeminine => objectsNeedFeminine,
+                    ObjectKind.NeedPlural => objectsNeedPlural,
+                    _ => Array.Empty<string>()
+                };
+                var reasonSource = template.ReasonKind == ReasonKind.Short ? reasonsShort : reasons;
+
+                foreach (var greet in greetings)
+                {
+                    foreach (var verb in verbSource)
                     {
-                        foreach (var ending in endings)
+                        foreach (var obj in objectSource)
                         {
-                            variants.Add($"{greet} {req} {placeholder}, {ending}");
-                            if (variants.Count >= 200)
+                            foreach (var reason in reasonSource)
                             {
-                                return variants;
+                                string text = ApplyTemplate(template, greet, verb, obj, reason);
+                                if (!IsValidVariant(text))
+                                {
+                                    continue;
+                                }
+
+                                if (filterNearDuplicates)
+                                {
+                                    var nearKey = NormalizeForDedup(text, removePunctuation: true);
+                                    if (!seenNear.Add(nearKey))
+                                    {
+                                        continue;
+                                    }
+                                }
+
+                                if (!seenExact.Add(text))
+                                {
+                                    continue;
+                                }
+
+                                variants.Add(text);
                             }
                         }
                     }
@@ -416,9 +474,144 @@ namespace TelegramTrayLauncher
                 variants.Add(TemplateDefaults.DefaultText);
             }
 
+            Shuffle(variants);
+
+            if (variants.Count > count)
+            {
+                variants = variants.Take(count).ToList();
+            }
+
+            _log($"Шаблоны: теоретически {theoreticalTotal}, с учетом фильтров получаем {variants.Count}.");
+
             return variants;
         }
 
+                private static string ApplyTemplate(TemplateSpec template, string greeting, string verb, string obj, string reason)
+        {
+            var reasonText = template.UseReasonCap ? CapitalizeFirst(reason) : reason;
+
+            string text = template.Pattern
+                .Replace("{greeting}", greeting)
+                .Replace("{verb}", verb)
+                .Replace("{obj}", obj)
+                .Replace("{obj_need}", obj)
+                .Replace("{obj_need_plural}", obj)
+                .Replace("{reason}", reasonText)
+                .Replace("{reason_cap}", CapitalizeFirst(reason));
+
+            return NormalizeText(text);
+        }
+
+        private static string NormalizeText(string text)
+        {
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+            text = Regex.Replace(text, @"\s+([,?.])", "$1");
+            text = Regex.Replace(text, "\\s*\u2014\\s*", " \u2014 ");
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+            return text;
+        }
+
+        private static string NormalizeForDedup(string text, bool removePunctuation)
+        {
+            string normalized = text.ToLowerInvariant();
+            if (removePunctuation)
+            {
+                normalized = Regex.Replace(normalized, @"[^\p{L}\p{Nd}\s]", "");
+            }
+
+            normalized = Regex.Replace(normalized, @"\s+", " ").Trim();
+            return normalized;
+        }
+
+        private static bool IsValidVariant(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            if (!text.Contains(CompanyPlaceholder, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (text.Length > MaxVariantLength)
+            {
+                return false;
+            }
+
+            if (text.Contains("..", StringComparison.Ordinal) ||
+                text.Contains("!!", StringComparison.Ordinal) ||
+                text.Contains("??", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var lower = text.ToLowerInvariant();
+            if (lower.Contains("\u0434\u043e\u0431\u0440\u044b\u0439", StringComparison.Ordinal) ||
+                lower.Contains("\u0437\u0434\u0440\u0430\u0432\u0441\u0442\u0432\u0443\u0439\u0442\u0435", StringComparison.Ordinal) ||
+                lower.Contains("\u043f\u0440\u0438\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u044e", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private static string CapitalizeFirst(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return text;
+            }
+
+            if (text.Length == 1)
+            {
+                return text.ToUpperInvariant();
+            }
+
+            return char.ToUpperInvariant(text[0]) + text.Substring(1);
+        }
+
+        private void Shuffle(IList<string> items)
+        {
+            for (int i = items.Count - 1; i > 0; i--)
+            {
+                int j = _random.Next(i + 1);
+                (items[i], items[j]) = (items[j], items[i]);
+            }
+        }
+
+        private sealed class TemplateSpec
+        {
+            public TemplateSpec(string pattern, bool useVerb, ObjectKind objectKind, ReasonKind reasonKind, bool useReasonCap)
+            {
+                Pattern = pattern;
+                UseVerb = useVerb;
+                ObjectKind = objectKind;
+                ReasonKind = reasonKind;
+                UseReasonCap = useReasonCap;
+            }
+
+            public string Pattern { get; }
+            public bool UseVerb { get; }
+            public ObjectKind ObjectKind { get; }
+            public ReasonKind ReasonKind { get; }
+            public bool UseReasonCap { get; }
+        }
+
+        private enum ObjectKind
+        {
+            Accusative,
+            NeedFeminine,
+            NeedPlural
+        }
+
+        private enum ReasonKind
+        {
+            Full,
+            Short
+        }
         private static string EscapeSendKeys(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -426,15 +619,42 @@ namespace TelegramTrayLauncher
                 return string.Empty;
             }
 
-            return text
-                .Replace("{", "{{}")
-                .Replace("}", "{}}")
-                .Replace("+", "{+}")
-                .Replace("^", "{^}")
-                .Replace("%", "{%}")
-                .Replace("~", "{~}")
-                .Replace("(", "{(}")
-                .Replace(")", "{)}");
+            var builder = new StringBuilder(text.Length * 2);
+            foreach (char ch in text)
+            {
+                switch (ch)
+                {
+                    case '{':
+                        builder.Append("{{}");
+                        break;
+                    case '}':
+                        builder.Append("{}}");
+                        break;
+                    case '+':
+                        builder.Append("{+}");
+                        break;
+                    case '^':
+                        builder.Append("{^}");
+                        break;
+                    case '%':
+                        builder.Append("{%}");
+                        break;
+                    case '~':
+                        builder.Append("{~}");
+                        break;
+                    case '(':
+                        builder.Append("{(}");
+                        break;
+                    case ')':
+                        builder.Append("{)}");
+                        break;
+                    default:
+                        builder.Append(ch);
+                        break;
+                }
+            }
+
+            return builder.ToString();
         }
 
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
