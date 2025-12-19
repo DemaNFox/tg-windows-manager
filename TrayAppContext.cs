@@ -33,6 +33,7 @@ namespace TelegramTrayLauncher
         private readonly SettingsStore _settingsStore = new SettingsStore();
         private readonly TemplateHotkeyManager _templateHotkeyManager;
         private readonly TelegramUpdateManager _updateManager;
+        private readonly AppUpdateManager _appUpdateManager;
         private SettingsStore.Settings _settings;
         private readonly bool _useConsole;
 
@@ -47,6 +48,7 @@ namespace TelegramTrayLauncher
             var uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             _templateHotkeyManager = new TemplateHotkeyManager(Log, uiContext);
             _updateManager = new TelegramUpdateManager(_baseDir, Log, uiContext);
+            _appUpdateManager = new AppUpdateManager(Log, uiContext, ExitForUpdate);
 
             _menu = new ContextMenuStrip();
 
@@ -122,6 +124,7 @@ namespace TelegramTrayLauncher
 
             Log($"Tray icon created. Base directory: {_baseDir}");
             _updateManager.Start();
+            _appUpdateManager.Start();
         }
 
         private void Log(string message)
@@ -335,6 +338,26 @@ namespace TelegramTrayLauncher
                 _notifyIcon.Visible = false;
                 _notifyIcon.Dispose();
                 Log("Application exiting.");
+                Application.Exit();
+            }
+        }
+
+        private void ExitForUpdate()
+        {
+            Log("ExitForUpdate called.");
+            try
+            {
+                _overlayManager.HideOverlays();
+                _templateHotkeyManager.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log("Ошибка при выходе для обновления: " + ex.Message);
+            }
+            finally
+            {
+                _notifyIcon.Visible = false;
+                _notifyIcon.Dispose();
                 Application.Exit();
             }
         }

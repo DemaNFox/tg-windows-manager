@@ -49,6 +49,13 @@ namespace TelegramTrayLauncher
                 dirCount++;
                 _log($"Scanning directory: {dir}");
 
+                var tdataDir = Path.Combine(dir, "tdata");
+                if (!Directory.Exists(tdataDir))
+                {
+                    _log($"Skipping directory without tdata: {dir}");
+                    continue;
+                }
+
                 IEnumerable<string> filesInDir;
                 try
                 {
