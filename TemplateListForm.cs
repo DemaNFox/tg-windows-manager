@@ -123,7 +123,7 @@ namespace TelegramTrayLauncher
             }
 
             var current = _templates[index];
-            using var form = new TemplateEditForm(current);
+            using var form = new TemplateEditForm(current, current.IsDefault);
             if (form.ShowDialog() == DialogResult.OK && form.Result != null)
             {
                 var updated = form.Result;
@@ -163,6 +163,12 @@ namespace TelegramTrayLauncher
                 return;
             }
 
+            if (_templates[index].IsDefault)
+            {
+                MessageBox.Show("Базовый шаблон нельзя удалить.", "Шаблоны", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
             _templates.RemoveAt(index);
             RefreshList();
         }
@@ -170,7 +176,9 @@ namespace TelegramTrayLauncher
         private void RefreshList()
         {
             _list.Items.Clear();
-            foreach (var template in _templates.OrderBy(t => t.Key.ToString()))
+            foreach (var template in _templates
+                         .OrderByDescending(t => t.IsDefault)
+                         .ThenBy(t => t.Key.ToString()))
             {
                 _list.Items.Add(template.ToString());
             }

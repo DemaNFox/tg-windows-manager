@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace TelegramTrayLauncher
@@ -61,7 +61,29 @@ namespace TelegramTrayLauncher
         {
             settings ??= new Settings();
             settings.Templates ??= new List<TemplateSetting>();
+            EnsureDefaultTemplate(settings.Templates);
             return settings;
+        }
+
+        private static void EnsureDefaultTemplate(List<TemplateSetting> templates)
+        {
+            var existing = templates.FirstOrDefault(t =>
+                string.Equals(t.Text, TemplateDefaults.DefaultText, StringComparison.OrdinalIgnoreCase));
+
+            if (existing == null)
+            {
+                templates.Add(new TemplateSetting
+                {
+                    Text = TemplateDefaults.DefaultText,
+                    Key = Keys.None,
+                    IsDefault = true
+                });
+            }
+            else
+            {
+                existing.IsDefault = true;
+                existing.Text = TemplateDefaults.DefaultText;
+            }
         }
     }
 }

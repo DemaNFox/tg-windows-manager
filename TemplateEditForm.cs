@@ -8,6 +8,8 @@ namespace TelegramTrayLauncher
     {
         private readonly TextBox _textInput;
         private readonly TextBox _keyInput;
+        private readonly bool _textReadOnly;
+        private readonly bool _isDefault;
         private Keys _capturedKey = Keys.None;
 
         public TemplateSetting? Result { get; private set; }
@@ -17,8 +19,10 @@ namespace TelegramTrayLauncher
         {
         }
 
-        public TemplateEditForm(TemplateSetting? template)
+        public TemplateEditForm(TemplateSetting? template, bool textReadOnly = false)
         {
+            _textReadOnly = textReadOnly;
+            _isDefault = template?.IsDefault ?? false;
             Text = "Новый шаблон";
             Width = 420;
             Height = 320;
@@ -44,7 +48,9 @@ namespace TelegramTrayLauncher
                 Width = 380,
                 Height = 160,
                 Multiline = true,
-                ScrollBars = ScrollBars.Vertical
+                ScrollBars = ScrollBars.Vertical,
+                ReadOnly = _textReadOnly,
+                BackColor = _textReadOnly ? Color.WhiteSmoke : Color.White
             };
 
             var keyLabel = new Label
@@ -140,7 +146,8 @@ namespace TelegramTrayLauncher
             Result = new TemplateSetting
             {
                 Text = text,
-                Key = _capturedKey
+                Key = _capturedKey,
+                IsDefault = _isDefault
             };
 
             DialogResult = DialogResult.OK;
