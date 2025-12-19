@@ -37,6 +37,6 @@ namespace TelegramTrayLauncher
 
     internal static class TemplateDefaults
     {
-        public const string DefaultText = "Примет, скинь пожалуйста карточку компании (компания), не могуй найти";
+        public const string DefaultText = "\u041f\u0440\u0438\u0432\u0435\u0442, \u0441\u043a\u0438\u043d\u044c \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u043a\u043e\u043c\u043f\u0430\u043d\u0438\u0438 {\u043a\u043e\u043c\u043f\u0430\u043d\u0438\u044f}, \u043d\u0435 \u043c\u043e\u0433\u0443 \u043d\u0430\u0439\u0442\u0438";
     }
 }
