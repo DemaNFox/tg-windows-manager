@@ -89,16 +89,23 @@ namespace TelegramTrayLauncher
         public void StartAllAvailable(string baseDir, string? scaleArg)
         {
             var executables = DiscoverExecutables(baseDir);
+            StartExecutables(executables, scaleArg);
+        }
+
+        public void StartExecutables(IEnumerable<TelegramExecutable> executables, string? scaleArg)
+        {
             int started = 0;
+            var list = new List<TelegramExecutable>();
             foreach (var exe in executables)
             {
+                list.Add(exe);
                 if (TryStartProcess(exe.ExePath, exe.Directory, scaleArg))
                 {
                     started++;
                 }
             }
 
-            _log($"Started {started} Telegram instance(s) out of {executables.Count} available.");
+            _log($"Started {started} Telegram instance(s) out of {list.Count} available.");
         }
 
         public void StartSingle(string exePath, string workingDir, string? scaleArg)
@@ -379,6 +386,54 @@ namespace TelegramTrayLauncher
             }
 
             _log($"CloseAllTelegram finished. Processes handled: {handled}");
+        }
+
+        public void CloseTelegramForDirectories(IEnumerable<string> directories, string baseDir)
+        {
+            var directorySet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dir in directories)
+            {
+                if (!string.IsNullOrWhiteSpace(dir))
+                {
+                    directorySet.Add(dir);
+                }
+            }
+
+            if (directorySet.Count == 0)
+            {
+                return;
+            }
+
+            var processes = GetTrackedTelegramProcesses(baseDir);
+            foreach (var process in processes)
+            {
+                try
+                {
+                    if (process == null || process.HasExited)
+                    {
+                        continue;
+                    }
+
+                    string? exeDir = null;
+                    try
+                    {
+                        exeDir = Path.GetDirectoryName(process.MainModule?.FileName ?? string.Empty);
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
+
+                    if (!string.IsNullOrEmpty(exeDir) && directorySet.Contains(exeDir))
+                    {
+                        CloseSingleTelegram(process.Id, baseDir);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log("Error closing Telegram for directory group: " + ex.Message);
+                }
+            }
         }
     }
 }

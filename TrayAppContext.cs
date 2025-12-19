@@ -12,6 +12,8 @@ namespace TelegramTrayLauncher
 {
     internal class TrayAppContext : ApplicationContext
     {
+        private const string GroupUngroupedLabel = "Без группы";
+
         private readonly string _baseDir;
         private readonly NotifyIcon _notifyIcon;
         private readonly ContextMenuStrip _menu;
@@ -19,7 +21,10 @@ namespace TelegramTrayLauncher
         private readonly ToolStripMenuItem _openSingleMenu;
         private readonly ToolStripMenuItem _closeSingleMenu;
         private readonly ToolStripMenuItem _closeAllMenu;
+        private readonly ToolStripMenuItem _openGroupMenuItem;
+        private readonly ToolStripMenuItem _closeGroupMenuItem;
         private readonly ToolStripMenuItem _settingsMenu;
+        private readonly ToolStripMenuItem _accountsMenuItem;
         private readonly ToolStripMenuItem _scaleMenuItem;
         private readonly ToolStripMenuItem _templatesMenuItem;
         private readonly ToolStripMenuItem _templatesToggleItem;
@@ -27,6 +32,7 @@ namespace TelegramTrayLauncher
         private readonly OverlayManager _overlayManager;
         private readonly SettingsStore _settingsStore = new SettingsStore();
         private readonly TemplateHotkeyManager _templateHotkeyManager;
+        private readonly TelegramUpdateManager _updateManager;
         private SettingsStore.Settings _settings;
         private readonly bool _useConsole;
 
@@ -38,7 +44,9 @@ namespace TelegramTrayLauncher
             _processManager = new TelegramProcessManager(Log);
             _overlayManager = new OverlayManager(Log);
             _settings = _settingsStore.Load();
-            _templateHotkeyManager = new TemplateHotkeyManager(Log, SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext());
+            var uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+            _templateHotkeyManager = new TemplateHotkeyManager(Log, uiContext);
+            _updateManager = new TelegramUpdateManager(_baseDir, Log, uiContext);
 
             _menu = new ContextMenuStrip();
 
@@ -54,10 +62,19 @@ namespace TelegramTrayLauncher
             _closeAllMenu = new ToolStripMenuItem("Закрыть все аккаунты");
             _closeAllMenu.Click += (_, __) => CloseAllTelegram();
 
+            _openGroupMenuItem = new ToolStripMenuItem("Открыть группу");
+            _openGroupMenuItem.DropDownOpening += (_, __) => PopulateGroupMenu(_openGroupMenuItem, StartGroupFromMenu);
+
+            _closeGroupMenuItem = new ToolStripMenuItem("Закрыть группу");
+            _closeGroupMenuItem.DropDownOpening += (_, __) => PopulateGroupMenu(_closeGroupMenuItem, CloseGroupFromMenu);
+
             _settingsMenu = new ToolStripMenuItem("Параметры запуска");
             _scaleMenuItem = new ToolStripMenuItem("Масштаб интерфейса");
             _scaleMenuItem.Click += (_, __) => PromptScale();
             _settingsMenu.DropDownItems.Add(_scaleMenuItem);
+
+            _accountsMenuItem = new ToolStripMenuItem("Управление аккаунтами");
+            _accountsMenuItem.Click += (_, __) => OpenAccountManager();
 
             _templatesMenuItem = new ToolStripMenuItem("Шаблоны");
             _templatesMenuItem.Click += (_, __) => OpenTemplatesWindow();
@@ -75,8 +92,11 @@ namespace TelegramTrayLauncher
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_closeSingleMenu);
             _menu.Items.Add(_closeAllMenu);
+            _menu.Items.Add(_openGroupMenuItem);
+            _menu.Items.Add(_closeGroupMenuItem);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_settingsMenu);
+            _menu.Items.Add(_accountsMenuItem);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_templatesMenuItem);
             _menu.Items.Add(_templatesToggleItem);
@@ -101,6 +121,7 @@ namespace TelegramTrayLauncher
             };
 
             Log($"Tray icon created. Base directory: {_baseDir}");
+            _updateManager.Start();
         }
 
         private void Log(string message)
@@ -113,6 +134,102 @@ namespace TelegramTrayLauncher
             {
                 Debug.WriteLine(message);
             }
+        }
+
+        private void OpenAccountManager()
+        {
+            using var form = new AccountManagerForm(_baseDir, _processManager, _settingsStore, _settings);
+            if (form.ShowDialog() == DialogResult.OK)
+            {
+                _settings = _settingsStore.Load();
+            }
+        }
+
+        private bool IsAccountActive(string accountName)
+        {
+            if (_settings.AccountStates != null &&
+                _settings.AccountStates.TryGetValue(accountName, out var state))
+            {
+                return state == null || state.Status == AccountStatus.Active;
+            }
+
+            return true;
+        }
+
+        private void PopulateGroupMenu(ToolStripMenuItem menuItem, Action<string> action)
+        {
+            menuItem.DropDownItems.Clear();
+            _settings = _settingsStore.Load();
+
+            var ungrouped = new ToolStripMenuItem(GroupUngroupedLabel);
+            ungrouped.Click += (_, __) => action(GroupUngroupedLabel);
+            menuItem.DropDownItems.Add(ungrouped);
+
+            var groups = _settings.AccountGroups
+                .Select(g => g.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (groups.Count > 0)
+            {
+                menuItem.DropDownItems.Add(new ToolStripSeparator());
+                foreach (var name in groups)
+                {
+                    var item = new ToolStripMenuItem(name);
+                    item.Click += (_, __) => action(name);
+                    menuItem.DropDownItems.Add(item);
+                }
+            }
+        }
+
+        private void StartGroupFromMenu(string groupName)
+        {
+            var executables = GetExecutablesForGroup(groupName);
+            _processManager.StartExecutables(executables, NormalizeScale(_settings.Scale));
+        }
+
+        private void CloseGroupFromMenu(string groupName)
+        {
+            var executables = GetExecutablesForGroup(groupName);
+            var directories = executables.Select(e => e.Directory).ToList();
+            _processManager.CloseTelegramForDirectories(directories, _baseDir);
+        }
+
+        private List<TelegramProcessManager.TelegramExecutable> GetExecutablesForGroup(string groupName)
+        {
+            _settings = _settingsStore.Load();
+            bool ungrouped = string.Equals(groupName, GroupUngroupedLabel, StringComparison.OrdinalIgnoreCase);
+            var executables = _processManager.DiscoverExecutables(_baseDir);
+            var result = new List<TelegramProcessManager.TelegramExecutable>();
+
+            foreach (var exe in executables)
+            {
+                if (!_settings.AccountStates.TryGetValue(exe.Name, out var state) || state == null)
+                {
+                    state = new AccountState();
+                    _settings.AccountStates[exe.Name] = state;
+                }
+
+                if (state.Status != AccountStatus.Active)
+                {
+                    continue;
+                }
+
+                if (ungrouped)
+                {
+                    if (string.IsNullOrWhiteSpace(state.GroupName))
+                    {
+                        result.Add(exe);
+                    }
+                }
+                else if (string.Equals(state.GroupName, groupName, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(exe);
+                }
+            }
+
+            return result;
         }
 
         private void OpenAccountCloseDialog()
@@ -167,7 +284,9 @@ namespace TelegramTrayLauncher
             }
 
             menuItem.DropDownItems.Clear();
-            var executables = _processManager.DiscoverExecutables(_baseDir);
+            var executables = _processManager.DiscoverExecutables(_baseDir)
+                .Where(exe => IsAccountActive(exe.Name))
+                .ToList();
             if (executables.Count == 0)
             {
                 menuItem.DropDownItems.Add(new ToolStripMenuItem("Нет доступных аккаунтов") { Enabled = false });
@@ -187,7 +306,10 @@ namespace TelegramTrayLauncher
 
         private void OpenAllAccounts()
         {
-            _processManager.StartAllAvailable(_baseDir, NormalizeScale(_settings.Scale));
+            var executables = _processManager.DiscoverExecutables(_baseDir)
+                .Where(exe => IsAccountActive(exe.Name))
+                .ToList();
+            _processManager.StartExecutables(executables, NormalizeScale(_settings.Scale));
         }
 
         private void CloseAllTelegram()
