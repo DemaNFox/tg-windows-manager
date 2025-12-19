@@ -39,3 +39,32 @@
 
 ## РЎР±РѕСЂРєР°
 `dotnet build -c Release` (TargetFramework: `net8.0-windows`). РџСЂРµРґСѓРїСЂРµР¶РґРµРЅРёРµ NETSDK1137 Рѕ СЃРјРµРЅРµ SDK РјРѕР¶РЅРѕ РёРіРЅРѕСЂРёСЂРѕРІР°С‚СЊ РёР»Рё РїРѕРјРµРЅСЏС‚СЊ Sdk РЅР° `Microsoft.NET.Sdk`.
+
+## Release
+Publish portable self-contained single-file build for Windows so users can run without extra runtimes.
+
+- Profile: Properties/PublishProfiles/Portable.pubxml
+- Command: dotnet publish -p:PublishProfile=Portable
+- Output: bin/Release/net8.0-windows/win-x64/publish/
+- Package: zip the publish folder for distribution
+
+## Notes
+Only subfolders that contain a tdata directory are considered valid account folders.
+
+## Обновления приложения
+Авто-обновление самой программы проверяет последний GitHub Release по тегу `v*` и скачивает portable-архив.
+
+Настройка через `app_update.json` в папке рядом с exe:
+
+{
+  "RepoOwner": "OWNER",
+  "RepoName": "REPO",
+  "AssetName": "TelegramTrayLauncher-portable-win-x64.zip"
+}
+
+- `AssetName` можно не указывать: тогда берётся первый asset с суффиксом `portable-win-x64.zip`.
+- После скачивания архив распаковывается во временную папку, файлы копируются в папку запуска, приложение перезапускается.
+- app_update.json is included in publish output; update RepoOwner/RepoName if the repository changes.
+
+## Версионирование
+Версия фиксируется локально в `TelegramTrayLauncher.csproj` (поле `<Version>`). Для релиза тег должен совпадать с этой версией (например, `v1.0.0`).

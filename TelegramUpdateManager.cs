@@ -147,7 +147,11 @@ namespace TelegramTrayLauncher
             {
                 foreach (var dir in Directory.GetDirectories(_baseDir))
                 {
-                    result.Add(dir);
+                    var tdataPath = Path.Combine(dir, "tdata");
+                    if (Directory.Exists(tdataPath))
+                    {
+                        result.Add(dir);
+                    }
                 }
             }
             catch (Exception ex)

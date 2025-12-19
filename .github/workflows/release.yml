@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish portable
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          dotnet publish -p:PublishProfile=Portable -p:Version=$version -p:AssemblyVersion=$version -p:FileVersion=$version -p:InformationalVersion=$version
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          $publishDir = "bin\Release\net8.0-windows\win-x64\publish"
+          $zipName = "TelegramTrayLauncher-portable-win-x64.zip"
+          if (!(Test-Path $publishDir)) {
+            throw "Publish output not found: $publishDir"
+          }
+          if (Test-Path $zipName) {
+            Remove-Item $zipName -Force
+          }
+          Compress-Archive -Path "$publishDir\*" -DestinationPath $zipName
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TelegramTrayLauncher-portable-win-x64.zip
