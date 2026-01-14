@@ -20,15 +20,22 @@ namespace TelegramTrayLauncher
         private const string DefaultDownloadUrl = "https://telegram.org/dl/desktop/win64_portable";
         private const string DefaultVersionUrl = "https://api.github.com/repos/telegramdesktop/tdesktop/releases";
 
-        private readonly string _baseDir;
+        private string _baseDir;
         private readonly Action<string> _log;
         private readonly SynchronizationContext _uiContext;
+        private readonly Func<HttpClient> _httpClientFactory;
 
-        public TelegramUpdateManager(string baseDir, Action<string> log, SynchronizationContext uiContext)
+        public TelegramUpdateManager(string baseDir, Action<string> log, SynchronizationContext uiContext, Func<HttpClient>? httpClientFactory = null)
         {
             _baseDir = baseDir ?? string.Empty;
             _log = log;
             _uiContext = uiContext;
+            _httpClientFactory = httpClientFactory ?? (() => new HttpClient());
+        }
+
+        public void UpdateBaseDir(string baseDir)
+        {
+            _baseDir = baseDir ?? string.Empty;
         }
 
         public void Start()
@@ -44,20 +51,24 @@ namespace TelegramTrayLauncher
                 string downloadUrl = !string.IsNullOrWhiteSpace(config?.DownloadUrl) ? config.DownloadUrl : DefaultDownloadUrl;
                 string versionUrl = !string.IsNullOrWhiteSpace(config?.VersionUrl) ? config.VersionUrl : DefaultVersionUrl;
 
-                if (string.IsNullOrWhiteSpace(downloadUrl))
-                {
-                    _log("Telegram update skipped: download URL is not configured.");
-                    return;
-                }
-
-                string baseExePath = Path.Combine(AppContext.BaseDirectory, BaseTelegramFileName);
+                string baseExePath = Path.Combine(AppContext.BaseDirectory, "assets", BaseTelegramFileName);
                 bool baseExists = File.Exists(baseExePath);
                 bool updated = false;
+                if (baseExists)
+                {
+                    await PromptCreateMissingTargetsAsync(baseExePath);
+                }
 
                 UpdateInfo? updateInfo = null;
                 if (!string.IsNullOrWhiteSpace(versionUrl))
                 {
                     updateInfo = await FetchUpdateInfoAsync(versionUrl);
+                }
+
+                if (string.IsNullOrWhiteSpace(downloadUrl))
+                {
+                    _log("Telegram update skipped: download URL is not configured.");
+                    return;
                 }
 
                 if (!baseExists)
@@ -87,7 +98,7 @@ namespace TelegramTrayLauncher
             }
             catch (Exception ex)
             {
-                _log("Telegram update failed: " + ex.Message);
+                LogUpdateFailure("Telegram update failed.", ex);
             }
         }
 
@@ -166,7 +177,7 @@ namespace TelegramTrayLauncher
         {
             try
             {
-                using var client = new HttpClient();
+                using var client = _httpClientFactory();
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("tg-manager");
                 string payload = await client.GetStringAsync(versionUrl);
                 payload = payload.Trim();
@@ -211,11 +222,6 @@ namespace TelegramTrayLauncher
 
         private bool IsUpdateAvailable(string baseExePath, string? remoteVersion)
         {
-            if (string.IsNullOrWhiteSpace(remoteVersion))
-            {
-                return false;
-            }
-
             string? localVersion = null;
             try
             {
@@ -227,22 +233,35 @@ namespace TelegramTrayLauncher
                 // ignore
             }
 
-            if (string.IsNullOrWhiteSpace(localVersion))
+            string remoteText = NormalizeVersion(remoteVersion);
+            if (string.IsNullOrWhiteSpace(remoteText))
+            {
+                return false;
+            }
+            string localText = NormalizeVersion(localVersion);
+
+            if (string.IsNullOrWhiteSpace(localText))
             {
                 return true;
             }
 
-            if (Version.TryParse(localVersion, out var local) &&
-                Version.TryParse(remoteVersion, out var remote))
+            if (Version.TryParse(localText, out var local) &&
+                Version.TryParse(remoteText, out var remote))
             {
                 return remote > local;
             }
 
-            return !string.Equals(localVersion, remoteVersion, StringComparison.OrdinalIgnoreCase);
+            return !string.Equals(localText, remoteText, StringComparison.OrdinalIgnoreCase);
         }
 
-        private async Task DownloadAndReplaceAsync(string targetPath, string downloadUrl, string? sha256)
+        internal async Task DownloadAndReplaceAsync(string targetPath, string downloadUrl, string? sha256)
         {
+            var targetDir = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrWhiteSpace(targetDir))
+            {
+                Directory.CreateDirectory(targetDir);
+            }
+
             string tempPath = targetPath + TempFileSuffix;
             string tempZipPath = tempPath + ".zip";
             _log("Downloading Telegram archive from: " + downloadUrl);
@@ -250,7 +269,7 @@ namespace TelegramTrayLauncher
             bool isZip = downloadUrl.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
                          downloadUrl.Contains("win64_portable", StringComparison.OrdinalIgnoreCase);
 
-            using (var client = new HttpClient())
+            using (var client = _httpClientFactory())
             using (var response = await client.GetAsync(downloadUrl))
             {
                 response.EnsureSuccessStatusCode();
@@ -396,6 +415,49 @@ namespace TelegramTrayLauncher
             }, null);
 
             return tcs.Task;
+        }
+
+        private static string NormalizeVersion(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            string text = value.Trim();
+            if (text.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            {
+                text = text.Substring(1);
+            }
+
+            int plusIndex = text.IndexOf('+');
+            if (plusIndex >= 0)
+            {
+                text = text.Substring(0, plusIndex);
+            }
+
+            int dashIndex = text.IndexOf('-');
+            if (dashIndex >= 0)
+            {
+                text = text.Substring(0, dashIndex);
+            }
+
+            return text.Trim();
+        }
+
+        private void LogUpdateFailure(string message, Exception ex)
+        {
+            _log(message + " " + ex.Message);
+            try
+            {
+                string logPath = Path.Combine(AppContext.BaseDirectory, "telegram_update.log");
+                string entry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}{ex}{Environment.NewLine}";
+                File.AppendAllText(logPath, entry);
+            }
+            catch
+            {
+                // ignore logging failures
+            }
         }
 
         private static string ComputeSha256(string filePath)

@@ -78,6 +78,32 @@ namespace TelegramTrayLauncher
             return exeDir;
         }
 
+        public static bool TryPersistWorkdir(string path, Action<string>? log = null)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                var full = Path.GetFullPath(path);
+                if (!Directory.Exists(full))
+                {
+                    log?.Invoke($"Workdir does not exist: {full}");
+                    return false;
+                }
+
+                Persist(full, log);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                log?.Invoke("Cannot persist workdir: " + ex.Message);
+                return false;
+            }
+        }
+
         private static string? TryReadSavedWorkdir(Action<string>? log)
         {
             try

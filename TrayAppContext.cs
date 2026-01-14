@@ -14,7 +14,7 @@ namespace TelegramTrayLauncher
     {
         private const string GroupUngroupedLabel = "Без группы";
 
-        private readonly string _baseDir;
+        private string _baseDir;
         private readonly NotifyIcon _notifyIcon;
         private readonly ContextMenuStrip _menu;
         private readonly ToolStripMenuItem _openAllMenu;
@@ -26,6 +26,7 @@ namespace TelegramTrayLauncher
         private readonly ToolStripMenuItem _settingsMenu;
         private readonly ToolStripMenuItem _accountsMenuItem;
         private readonly ToolStripMenuItem _scaleMenuItem;
+        private readonly ToolStripMenuItem _changeBaseDirMenuItem;
         private readonly ToolStripMenuItem _templatesMenuItem;
         private readonly ToolStripMenuItem _templatesToggleItem;
         private readonly TelegramProcessManager _processManager;
@@ -74,6 +75,9 @@ namespace TelegramTrayLauncher
             _scaleMenuItem = new ToolStripMenuItem("Масштаб интерфейса");
             _scaleMenuItem.Click += (_, __) => PromptScale();
             _settingsMenu.DropDownItems.Add(_scaleMenuItem);
+            _changeBaseDirMenuItem = new ToolStripMenuItem("Сменить папку аккаунтов");
+            _changeBaseDirMenuItem.Click += (_, __) => PromptChangeBaseDirectory();
+            _settingsMenu.DropDownItems.Add(_changeBaseDirMenuItem);
 
             _accountsMenuItem = new ToolStripMenuItem("Управление аккаунтами");
             _accountsMenuItem.Click += (_, __) => OpenAccountManager();
@@ -90,15 +94,16 @@ namespace TelegramTrayLauncher
             exitItem.Click += (_, __) => ExitApplication();
 
             _menu.Items.Add(_openAllMenu);
-            _menu.Items.Add(_openSingleMenu);
-            _menu.Items.Add(new ToolStripSeparator());
-            _menu.Items.Add(_closeSingleMenu);
             _menu.Items.Add(_closeAllMenu);
+            _menu.Items.Add(new ToolStripSeparator());
+            _menu.Items.Add(_openSingleMenu);
+            _menu.Items.Add(_closeSingleMenu);
+            _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_openGroupMenuItem);
             _menu.Items.Add(_closeGroupMenuItem);
+            _menu.Items.Add(_accountsMenuItem);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_settingsMenu);
-            _menu.Items.Add(_accountsMenuItem);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_templatesMenuItem);
             _menu.Items.Add(_templatesToggleItem);
@@ -408,6 +413,39 @@ namespace TelegramTrayLauncher
                 _settings.Scale = string.IsNullOrWhiteSpace(input.Text) ? null : input.Text.Trim();
                 _settingsStore.Save(_settings);
             }
+        }
+
+        private void PromptChangeBaseDirectory()
+        {
+            using var dialog = new FolderBrowserDialog
+            {
+                Description = "Select the base folder that contains account subfolders (tdata).",
+                UseDescriptionForTitle = true,
+                ShowNewFolderButton = false
+            };
+
+            var result = dialog.ShowDialog();
+            if (result != DialogResult.OK || string.IsNullOrWhiteSpace(dialog.SelectedPath))
+            {
+                return;
+            }
+
+            string selected = dialog.SelectedPath;
+            if (!Directory.Exists(selected))
+            {
+                MessageBox.Show("Selected folder does not exist.", "Telegram Manager", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!BaseDirectoryResolver.TryPersistWorkdir(selected, Log))
+            {
+                MessageBox.Show("Failed to save the base folder.", "Telegram Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            _baseDir = selected;
+            _updateManager.UpdateBaseDir(_baseDir);
+            Log("Base directory updated: " + _baseDir);
         }
 
         private string? NormalizeScale(string? scale)
