@@ -35,6 +35,7 @@ namespace TelegramTrayLauncher
         private readonly TemplateHotkeyManager _templateHotkeyManager;
         private readonly TelegramUpdateManager _updateManager;
         private readonly AppUpdateManager _appUpdateManager;
+        private readonly ToolStripMenuItem _versionMenuItem;
         private SettingsStore.Settings _settings;
         private readonly bool _useConsole;
 
@@ -90,6 +91,8 @@ namespace TelegramTrayLauncher
             UpdateTemplatesToggleTitle();
             _templateHotkeyManager.Configure(_settings.Templates, _settings.TemplatesEnabled);
 
+            _versionMenuItem = new ToolStripMenuItem("Version: " + GetAppVersion()) { Enabled = false };
+
             var exitItem = new ToolStripMenuItem("Выход");
             exitItem.Click += (_, __) => ExitApplication();
 
@@ -108,6 +111,7 @@ namespace TelegramTrayLauncher
             _menu.Items.Add(_templatesMenuItem);
             _menu.Items.Add(_templatesToggleItem);
             _menu.Items.Add(new ToolStripSeparator());
+            _menu.Items.Add(_versionMenuItem);
             _menu.Items.Add(exitItem);
 
             _notifyIcon = new NotifyIcon
@@ -479,7 +483,23 @@ namespace TelegramTrayLauncher
                 ? "Отключить шаблоны"
                 : "Включить шаблоны";
         }
+
+        private static string GetAppVersion()
+        {
+            var entry = System.Reflection.Assembly.GetEntryAssembly();
+            var infoAttr = entry?.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .FirstOrDefault() as System.Reflection.AssemblyInformationalVersionAttribute;
+            var infoVersion = infoAttr?.InformationalVersion;
+            if (!string.IsNullOrWhiteSpace(infoVersion))
+            {
+                return infoVersion;
+            }
+
+            var nameVersion = entry?.GetName().Version?.ToString();
+            return string.IsNullOrWhiteSpace(nameVersion) ? "unknown" : nameVersion;
+        }
     }
 
     internal sealed record AccountEntry(string Number, string Label, int Pid);
 }
+
