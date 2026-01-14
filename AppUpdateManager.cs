@@ -77,7 +77,8 @@ namespace TelegramTrayLauncher
             }
             catch (Exception ex)
             {
-                _log("App update failed: " + ex.Message);
+                LogAppUpdateFailure("App update failed.", ex);
+                TryShowUpdateError("Не удалось обновить программу. Подробности в app_update.log.");
             }
         }
 
@@ -91,11 +92,11 @@ namespace TelegramTrayLauncher
             var progressForm = await ShowProgressFormAsync();
             try
             {
-                _log("Downloading app update from: " + assetUrl);
-                await DownloadFileWithProgressAsync(assetUrl, zipPath, progressForm);
+            _log("Downloading app update from: " + assetUrl);
+            await DownloadFileWithProgressAsync(assetUrl, zipPath, progressForm);
 
-                UpdateProgress(progressForm, "Preparing update...", null, marquee: true);
-                ZipFile.ExtractToDirectory(zipPath, extractPath);
+            UpdateProgress(progressForm, "Preparing update...", null, marquee: true);
+            ZipFile.ExtractToDirectory(zipPath, extractPath);
             }
             finally
             {
@@ -114,17 +115,22 @@ namespace TelegramTrayLauncher
             string exeName = Path.GetFileName(exePath);
 
             string scriptPath = Path.Combine(tempRoot, "apply-update.ps1");
+            string logPath = Path.Combine(tempRoot, "apply-update.log");
             File.WriteAllText(scriptPath, BuildUpdateScript(), Encoding.UTF8);
 
             var startInfo = new ProcessStartInfo
             {
                 FileName = "powershell",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -Pid {Process.GetCurrentProcess().Id} -Source \"{extractPath}\" -Target \"{targetDir}\" -Exe \"{exeName}\"",
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -Pid {Process.GetCurrentProcess().Id} -Source \"{extractPath}\" -Target \"{targetDir}\" -Exe \"{exeName}\" -LogPath \"{logPath}\"",
                 CreateNoWindow = true,
                 UseShellExecute = false
             };
 
-            Process.Start(startInfo);
+            var process = Process.Start(startInfo);
+            if (process == null)
+            {
+                throw new InvalidOperationException("Failed to start update script.");
+            }
             _uiContext.Post(_ => _exitForUpdate(), null);
         }
 
@@ -214,22 +220,37 @@ param(
     [int]$Pid,
     [string]$Source,
     [string]$Target,
-    [string]$Exe
+    [string]$Exe,
+    [string]$LogPath
 )
 
+$ErrorActionPreference = 'Stop'
+function Write-Log([string]$Message) {
+    $line = ""[{0}] {1}"" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
+    try { Add-Content -Path $LogPath -Value $line } catch {}
+}
+
 try {
+    Write-Log ""Waiting for process $Pid""
     Wait-Process -Id $Pid -ErrorAction SilentlyContinue
 } catch {
 }
 
 try {
+    Write-Log ""Copying files from $Source to $Target""
     Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force
 } catch {
     Start-Sleep -Seconds 1
     Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force
 }
 
-Start-Process -FilePath (Join-Path $Target $Exe)
+try {
+    $exePath = Join-Path $Target $Exe
+    Write-Log ""Starting updated app: $exePath""
+    Start-Process -FilePath $exePath -WorkingDirectory $Target
+} catch {
+    Write-Log ""Failed to start updated app: $($_.Exception.Message)""
+}
 ";
         }
 
@@ -393,6 +414,36 @@ Start-Process -FilePath (Join-Path $Target $Exe)
             }, null);
 
             return tcs.Task;
+        }
+
+        private void LogAppUpdateFailure(string message, Exception ex)
+        {
+            _log(message + " " + ex.Message);
+            try
+            {
+                string logPath = Path.Combine(AppContext.BaseDirectory, "app_update.log");
+                string entry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}{ex}{Environment.NewLine}";
+                File.AppendAllText(logPath, entry);
+            }
+            catch
+            {
+                // ignore logging failures
+            }
+        }
+
+        private void TryShowUpdateError(string message)
+        {
+            _uiContext.Post(_ =>
+            {
+                try
+                {
+                    MessageBox.Show(message, "Telegram Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                catch
+                {
+                    // ignore UI failures
+                }
+            }, null);
         }
 
         private sealed class UpdateProgressForm : Form
