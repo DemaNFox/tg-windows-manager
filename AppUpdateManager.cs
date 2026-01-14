@@ -88,14 +88,18 @@ namespace TelegramTrayLauncher
             string zipPath = Path.Combine(tempRoot, "update.zip");
             string extractPath = Path.Combine(tempRoot, "extract");
 
-            _log("Downloading app update from: " + assetUrl);
-            using (var client = new HttpClient())
-            using (var response = await client.GetAsync(assetUrl))
+            var progressForm = await ShowProgressFormAsync();
+            try
             {
-                response.EnsureSuccessStatusCode();
-                await using var stream = await response.Content.ReadAsStreamAsync();
-                await using var file = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                await stream.CopyToAsync(file);
+                _log("Downloading app update from: " + assetUrl);
+                await DownloadFileWithProgressAsync(assetUrl, zipPath, progressForm);
+
+                UpdateProgress(progressForm, "Preparing update...", null, marquee: true);
+                ZipFile.ExtractToDirectory(zipPath, extractPath);
+            }
+            finally
+            {
+                CloseProgressForm(progressForm);
             }
 
             ZipFile.ExtractToDirectory(zipPath, extractPath);
@@ -122,6 +126,85 @@ namespace TelegramTrayLauncher
 
             Process.Start(startInfo);
             _uiContext.Post(_ => _exitForUpdate(), null);
+        }
+
+        private async Task DownloadFileWithProgressAsync(string url, string destinationPath, UpdateProgressForm progressForm)
+        {
+            using var client = new HttpClient();
+            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            long? totalLength = response.Content.Headers.ContentLength;
+            if (totalLength.HasValue && totalLength.Value > 0)
+            {
+                UpdateProgress(progressForm, "Downloading update...", 0, marquee: false);
+            }
+            else
+            {
+                UpdateProgress(progressForm, "Downloading update...", null, marquee: true);
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync();
+            await using var file = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
+
+            var buffer = new byte[81920];
+            long totalRead = 0;
+            int read;
+            while ((read = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                await file.WriteAsync(buffer, 0, read);
+                if (totalLength.HasValue && totalLength.Value > 0)
+                {
+                    totalRead += read;
+                    int percent = (int)Math.Min(100, totalRead * 100 / totalLength.Value);
+                    UpdateProgress(progressForm, "Downloading update...", percent, marquee: false);
+                }
+            }
+        }
+
+        private Task<UpdateProgressForm> ShowProgressFormAsync()
+        {
+            var tcs = new TaskCompletionSource<UpdateProgressForm>();
+            _uiContext.Post(_ =>
+            {
+                try
+                {
+                    var form = new UpdateProgressForm();
+                    form.Show();
+                    tcs.TrySetResult(form);
+                }
+                catch (Exception ex)
+                {
+                    _log("Failed to show update progress: " + ex.Message);
+                    tcs.TrySetResult(new UpdateProgressForm());
+                }
+            }, null);
+
+            return tcs.Task;
+        }
+
+        private void UpdateProgress(UpdateProgressForm form, string text, int? percent, bool marquee)
+        {
+            _uiContext.Post(_ =>
+            {
+                if (form.IsDisposed)
+                {
+                    return;
+                }
+
+                form.SetProgress(text, percent, marquee);
+            }, null);
+        }
+
+        private void CloseProgressForm(UpdateProgressForm form)
+        {
+            _uiContext.Post(_ =>
+            {
+                if (!form.IsDisposed)
+                {
+                    form.Close();
+                }
+            }, null);
         }
 
         private static string BuildUpdateScript()
@@ -310,6 +393,57 @@ Start-Process -FilePath (Join-Path $Target $Exe)
             }, null);
 
             return tcs.Task;
+        }
+
+        private sealed class UpdateProgressForm : Form
+        {
+            private readonly Label _label;
+            private readonly ProgressBar _progress;
+
+            public UpdateProgressForm()
+            {
+                Width = 420;
+                Height = 140;
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                StartPosition = FormStartPosition.CenterScreen;
+                MaximizeBox = false;
+                MinimizeBox = false;
+                ShowInTaskbar = true;
+                Text = "Telegram Manager";
+                TopMost = true;
+
+                _label = new Label
+                {
+                    Left = 12,
+                    Top = 12,
+                    Width = 380,
+                    Text = "Downloading update..."
+                };
+
+                _progress = new ProgressBar
+                {
+                    Left = 12,
+                    Top = 40,
+                    Width = 380,
+                    Height = 20,
+                    Style = ProgressBarStyle.Continuous,
+                    Minimum = 0,
+                    Maximum = 100
+                };
+
+                Controls.Add(_label);
+                Controls.Add(_progress);
+            }
+
+            public void SetProgress(string text, int? percent, bool marquee)
+            {
+                _label.Text = text;
+                _progress.Style = marquee ? ProgressBarStyle.Marquee : ProgressBarStyle.Continuous;
+                if (!marquee && percent.HasValue)
+                {
+                    _progress.Value = Math.Max(_progress.Minimum, Math.Min(_progress.Maximum, percent.Value));
+                }
+            }
         }
     }
 
