@@ -492,11 +492,34 @@ namespace TelegramTrayLauncher
             var infoVersion = infoAttr?.InformationalVersion;
             if (!string.IsNullOrWhiteSpace(infoVersion))
             {
-                return infoVersion;
+                return NormalizeVersion(infoVersion);
             }
 
             var nameVersion = entry?.GetName().Version?.ToString();
-            return string.IsNullOrWhiteSpace(nameVersion) ? "unknown" : nameVersion;
+            return string.IsNullOrWhiteSpace(nameVersion) ? "unknown" : NormalizeVersion(nameVersion);
+        }
+
+        private static string NormalizeVersion(string value)
+        {
+            var text = value.Trim();
+            if (text.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            {
+                text = text.Substring(1);
+            }
+
+            int plusIndex = text.IndexOf('+');
+            if (plusIndex >= 0)
+            {
+                text = text.Substring(0, plusIndex);
+            }
+
+            int dashIndex = text.IndexOf('-');
+            if (dashIndex >= 0)
+            {
+                text = text.Substring(0, dashIndex);
+            }
+
+            return text.Trim();
         }
     }
 

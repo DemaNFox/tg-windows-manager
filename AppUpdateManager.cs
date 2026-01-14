@@ -41,48 +41,70 @@ namespace TelegramTrayLauncher
                 var config = AppUpdateConfig.LoadOptional(AppContext.BaseDirectory, _log);
                 if (config == null || string.IsNullOrWhiteSpace(config.RepoOwner) || string.IsNullOrWhiteSpace(config.RepoName))
                 {
-                    _log("App update skipped: app_update.json is missing repo settings.");
-                    return;
+                    if (config == null || string.IsNullOrWhiteSpace(config.LocalPath))
+                    {
+                        _log("App update skipped: app_update.json is missing repo settings.");
+                        return;
+                    }
                 }
 
-                var release = await FetchLatestReleaseAsync(config.RepoOwner, config.RepoName);
-                if (release == null || string.IsNullOrWhiteSpace(release.Tag))
-                {
-                    _log("App update skipped: latest release not found.");
-                    return;
-                }
+                string? assetUrl = null;
+                string? tagLabel = null;
 
-                string? assetUrl = ResolveAssetUrl(release, config.AssetName);
-                if (string.IsNullOrWhiteSpace(assetUrl))
+                if (!string.IsNullOrWhiteSpace(config?.LocalPath))
                 {
-                    _log("App update skipped: release asset not found.");
-                    return;
-                }
+                    string localPath = config.LocalPath;
+                    if (!Path.IsPathRooted(localPath))
+                    {
+                        localPath = Path.Combine(AppContext.BaseDirectory, localPath);
+                    }
 
-                if (!IsUpdateAvailable(release.Tag))
+                    assetUrl = localPath;
+                    tagLabel = "local";
+                }
+                else
                 {
-                    _log("App update skipped: already on latest version.");
-                    return;
+                    var release = await FetchLatestReleaseAsync(config!.RepoOwner!, config.RepoName!);
+                    if (release == null || string.IsNullOrWhiteSpace(release.Tag))
+                    {
+                        _log("App update skipped: latest release not found.");
+                        return;
+                    }
+
+                    assetUrl = ResolveAssetUrl(release, config.AssetName);
+                    if (string.IsNullOrWhiteSpace(assetUrl))
+                    {
+                        _log("App update skipped: release asset not found.");
+                        return;
+                    }
+
+                    if (!IsUpdateAvailable(release.Tag))
+                    {
+                        _log("App update skipped: already on latest version.");
+                        return;
+                    }
+
+                    tagLabel = release.Tag;
                 }
 
                 bool shouldUpdate = await PromptYesNoAsync(
-                    $"Доступна новая версия приложения ({release.Tag}). Обновить сейчас?",
+                    $"\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u043d\u043e\u0432\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f ({tagLabel}). \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441?",
                     "Telegram Manager");
                 if (!shouldUpdate)
                 {
                     return;
                 }
 
-                await DownloadAndUpdateAsync(assetUrl);
+                await DownloadAndUpdateAsync(assetUrl!, config?.TestMode == true);
             }
             catch (Exception ex)
             {
                 LogAppUpdateFailure("App update failed.", ex);
-                TryShowUpdateError("Не удалось обновить программу. Подробности в app_update.log.");
+                TryShowUpdateError("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0443. \u041f\u043e\u0434\u0440\u043e\u0431\u043d\u043e\u0441\u0442\u0438 \u0432 app_update.log.");
             }
         }
 
-        private async Task DownloadAndUpdateAsync(string assetUrl)
+        private async Task DownloadAndUpdateAsync(string assetUrl, bool preserveAppUpdateJson)
         {
             string tempRoot = Path.Combine(Path.GetTempPath(), "tg-app-update-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(tempRoot);
@@ -92,18 +114,20 @@ namespace TelegramTrayLauncher
             var progressForm = await ShowProgressFormAsync();
             try
             {
-            _log("Downloading app update from: " + assetUrl);
-            await DownloadFileWithProgressAsync(assetUrl, zipPath, progressForm);
+                _log("Downloading app update from: " + assetUrl);
+                await DownloadFileWithProgressAsync(assetUrl, zipPath, progressForm);
 
-            UpdateProgress(progressForm, "Preparing update...", null, marquee: true);
-            ZipFile.ExtractToDirectory(zipPath, extractPath);
+                UpdateProgress(progressForm, "Preparing update...", null, marquee: true);
+                if (Directory.Exists(extractPath))
+                {
+                    Directory.Delete(extractPath, recursive: true);
+                }
+                ZipFile.ExtractToDirectory(zipPath, extractPath, overwriteFiles: true);
             }
             finally
             {
                 CloseProgressForm(progressForm);
             }
-
-            ZipFile.ExtractToDirectory(zipPath, extractPath);
 
             string? exePath = Process.GetCurrentProcess().MainModule?.FileName;
             if (string.IsNullOrWhiteSpace(exePath))
@@ -118,12 +142,34 @@ namespace TelegramTrayLauncher
             string logPath = Path.Combine(tempRoot, "apply-update.log");
             File.WriteAllText(scriptPath, BuildUpdateScript(), Encoding.UTF8);
 
+            string powershellPath = GetPowerShellPath();
+            string? preservePath = null;
+            if (preserveAppUpdateJson)
+            {
+                preservePath = Path.Combine(tempRoot, "app_update.json");
+                string sourcePath = Path.Combine(AppContext.BaseDirectory, ConfigFileName);
+                if (File.Exists(sourcePath))
+                {
+                    File.Copy(sourcePath, preservePath, overwrite: true);
+                }
+            }
+
+            string arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -ProcessId {Process.GetCurrentProcess().Id} -Source \"{extractPath}\" -Target \"{targetDir}\" -Exe \"{exeName}\" -LogPath \"{logPath}\"";
+            if (!string.IsNullOrWhiteSpace(preservePath))
+            {
+                arguments += $" -PreserveAppUpdateJson \"{preservePath}\"";
+            }
+            _log($"Starting update script: {powershellPath} {arguments}");
+
             var startInfo = new ProcessStartInfo
             {
-                FileName = "powershell",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -Pid {Process.GetCurrentProcess().Id} -Source \"{extractPath}\" -Target \"{targetDir}\" -Exe \"{exeName}\" -LogPath \"{logPath}\"",
+                FileName = powershellPath,
+                Arguments = arguments,
+                WorkingDirectory = tempRoot,
                 CreateNoWindow = true,
-                UseShellExecute = false
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
             };
 
             var process = Process.Start(startInfo);
@@ -131,11 +177,81 @@ namespace TelegramTrayLauncher
             {
                 throw new InvalidOperationException("Failed to start update script.");
             }
+
+            if (!WaitForUpdateScriptStart(process, logPath))
+            {
+                var stderr = SafeReadStream(process.StandardError);
+                var stdout = SafeReadStream(process.StandardOutput);
+                if (!string.IsNullOrWhiteSpace(stdout))
+                {
+                    WriteAppUpdateLog("Update script stdout: " + stdout.Trim());
+                }
+                if (!string.IsNullOrWhiteSpace(stderr))
+                {
+                    WriteAppUpdateLog("Update script stderr: " + stderr.Trim());
+                }
+                throw new InvalidOperationException("Update script failed to start.");
+            }
+
             _uiContext.Post(_ => _exitForUpdate(), null);
+        }
+
+        private bool WaitForUpdateScriptStart(Process process, string logPath)
+        {
+            var sw = Stopwatch.StartNew();
+            while (sw.Elapsed < TimeSpan.FromSeconds(3))
+            {
+                if (File.Exists(logPath))
+                {
+                    return true;
+                }
+
+                if (process.HasExited)
+                {
+                    WriteAppUpdateLog("Update script exited with code: " + process.ExitCode);
+                    return false;
+                }
+
+                Thread.Sleep(100);
+            }
+
+            WriteAppUpdateLog("Update script did not create a log file.");
+            return false;
+        }
+
+        private static string SafeReadStream(StreamReader reader)
+        {
+            try
+            {
+                return reader.ReadToEnd();
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static string GetPowerShellPath()
+        {
+            string system = Environment.GetFolderPath(Environment.SpecialFolder.System);
+            string candidate = Path.Combine(system, "WindowsPowerShell", "v1.0", "powershell.exe");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            return "powershell";
         }
 
         private async Task DownloadFileWithProgressAsync(string url, string destinationPath, UpdateProgressForm progressForm)
         {
+            if (File.Exists(url))
+            {
+                UpdateProgress(progressForm, "Copying update...", null, marquee: true);
+                File.Copy(url, destinationPath, overwrite: true);
+                return;
+            }
+
             using var client = new HttpClient();
             using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
             response.EnsureSuccessStatusCode();
@@ -217,11 +333,12 @@ namespace TelegramTrayLauncher
         {
             return @"
 param(
-    [int]$Pid,
+    [int]$ProcessId,
     [string]$Source,
     [string]$Target,
     [string]$Exe,
-    [string]$LogPath
+    [string]$LogPath,
+    [string]$PreserveAppUpdateJson
 )
 
 $ErrorActionPreference = 'Stop'
@@ -231,8 +348,8 @@ function Write-Log([string]$Message) {
 }
 
 try {
-    Write-Log ""Waiting for process $Pid""
-    Wait-Process -Id $Pid -ErrorAction SilentlyContinue
+    Write-Log ""Waiting for process $ProcessId""
+    Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
 } catch {
 }
 
@@ -242,6 +359,15 @@ try {
 } catch {
     Start-Sleep -Seconds 1
     Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force
+}
+
+try {
+    if ($PreserveAppUpdateJson -and (Test-Path $PreserveAppUpdateJson)) {
+        Write-Log ""Restoring app_update.json""
+        Copy-Item -Path $PreserveAppUpdateJson -Destination (Join-Path $Target 'app_update.json') -Force
+    }
+} catch {
+    Write-Log ""Failed to restore app_update.json: $($_.Exception.Message)""
 }
 
 try {
@@ -281,6 +407,11 @@ try {
 
         private bool IsUpdateAvailable(string remoteTag)
         {
+            if (AllowSameVersion())
+            {
+                return true;
+            }
+
             string remoteVersionText = NormalizeVersion(remoteTag);
             string localVersionText = NormalizeVersion(GetLocalVersion());
 
@@ -296,6 +427,19 @@ try {
             }
 
             return !string.Equals(localVersionText, remoteVersionText, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool AllowSameVersion()
+        {
+            string? value = Environment.GetEnvironmentVariable("TG_UPDATE_ALLOW_SAME_VERSION");
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            return value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                   value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                   value.Equals("yes", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string GetLocalVersion()
@@ -418,11 +562,26 @@ try {
 
         private void LogAppUpdateFailure(string message, Exception ex)
         {
-            _log(message + " " + ex.Message);
+            WriteAppUpdateLog(message + " " + ex.Message);
             try
             {
                 string logPath = Path.Combine(AppContext.BaseDirectory, "app_update.log");
                 string entry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}{ex}{Environment.NewLine}";
+                File.AppendAllText(logPath, entry);
+            }
+            catch
+            {
+                // ignore logging failures
+            }
+        }
+
+        private void WriteAppUpdateLog(string message)
+        {
+            _log(message);
+            try
+            {
+                string logPath = Path.Combine(AppContext.BaseDirectory, "app_update.log");
+                string entry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}";
                 File.AppendAllText(logPath, entry);
             }
             catch
@@ -504,6 +663,8 @@ try {
         public string? RepoOwner { get; set; }
         public string? RepoName { get; set; }
         public string? AssetName { get; set; }
+        public string? LocalPath { get; set; }
+        public bool TestMode { get; set; }
 
         public static AppUpdateConfig? LoadOptional(string baseDir, Action<string> log)
         {
@@ -539,3 +700,5 @@ try {
         public string Url { get; set; } = string.Empty;
     }
 }
+
+
