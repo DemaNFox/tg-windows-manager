@@ -54,10 +54,7 @@ namespace TelegramTrayLauncher
                 string baseExePath = Path.Combine(AppContext.BaseDirectory, "assets", BaseTelegramFileName);
                 bool baseExists = File.Exists(baseExePath);
                 bool updated = false;
-                if (baseExists)
-                {
-                    await PromptCreateMissingTargetsAsync(baseExePath);
-                }
+                var missingTargets = GetMissingTargets();
 
                 UpdateInfo? updateInfo = null;
                 if (!string.IsNullOrWhiteSpace(versionUrl))
@@ -74,8 +71,24 @@ namespace TelegramTrayLauncher
                 if (!baseExists)
                 {
                     _log("Base Telegram.exe is missing. Downloading...");
-                    await DownloadAndReplaceAsync(baseExePath, updateInfo?.DownloadUrl ?? downloadUrl, updateInfo?.Sha256);
-                    await PromptCreateMissingTargetsAsync(baseExePath);
+                    var downloadTask = DownloadAndReplaceAsync(baseExePath, updateInfo?.DownloadUrl ?? downloadUrl, updateInfo?.Sha256);
+
+                    if (missingTargets.Count > 0)
+                    {
+                        bool shouldInsert = await PromptYesNoAsync(
+                            $"\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d {BaseTelegramFileName} \u0432 {missingTargets.Count} \u043f\u0430\u043f\u043a\u0430\u0445. \u0421\u043a\u0430\u0447\u0430\u0442\u044c \u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u0444\u0430\u0439\u043b \u0438 \u043f\u043e\u0434\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0435\u0433\u043e? \u0418\u043b\u0438 \u0432\u044b \u043c\u043e\u0436\u0435\u0442\u0435 \u0441\u0430\u043c\u0438 \u0432\u0441\u0442\u0430\u0432\u0438\u0442\u044c {BaseTelegramFileName} \u0434\u043b\u044f \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432.",
+                            "Telegram Manager");
+                        await downloadTask;
+                        if (shouldInsert)
+                        {
+                            CopyToTargets(baseExePath, missingTargets);
+                        }
+                    }
+                    else
+                    {
+                        await downloadTask;
+                    }
+
                     return;
                 }
 
@@ -102,7 +115,7 @@ namespace TelegramTrayLauncher
             }
         }
 
-        private async Task PromptCreateMissingTargetsAsync(string baseExePath)
+        private List<string> GetMissingTargets()
         {
             var targets = GetTargetDirectories();
             var missing = new List<string>();
@@ -115,20 +128,12 @@ namespace TelegramTrayLauncher
                 }
             }
 
-            if (missing.Count == 0)
-            {
-                return;
-            }
+            return missing;
+        }
 
-            bool shouldCreate = await PromptYesNoAsync(
-                $"\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d {BaseTelegramFileName} \u0432 {missing.Count} \u043f\u0430\u043f\u043a\u0430\u0445. \u0421\u043e\u0437\u0434\u0430\u0442\u044c?",
-                "Telegram Manager");
-            if (!shouldCreate)
-            {
-                return;
-            }
-
-            foreach (var dir in missing)
+        private void CopyToTargets(string baseExePath, List<string> targets)
+        {
+            foreach (var dir in targets)
             {
                 TryCopy(baseExePath, Path.Combine(dir, BaseTelegramFileName), overwrite: false);
             }
