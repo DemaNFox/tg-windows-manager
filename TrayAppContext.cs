@@ -38,6 +38,10 @@ namespace TelegramTrayLauncher
         private readonly ToolStripMenuItem _versionMenuItem;
         private SettingsStore.Settings _settings;
         private readonly bool _useConsole;
+        private readonly SynchronizationContext _uiContext;
+        private FileSystemWatcher? _baseDirWatcher;
+        private System.Windows.Forms.Timer? _baseDirRescanTimer;
+        private readonly object _baseDirRescanLock = new object();
 
         public TrayAppContext(bool useConsole, string baseDir)
         {
@@ -47,10 +51,10 @@ namespace TelegramTrayLauncher
             _processManager = new TelegramProcessManager(Log);
             _overlayManager = new OverlayManager(Log);
             _settings = _settingsStore.Load();
-            var uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
-            _templateHotkeyManager = new TemplateHotkeyManager(Log, uiContext);
-            _updateManager = new TelegramUpdateManager(_baseDir, Log, uiContext);
-            _appUpdateManager = new AppUpdateManager(Log, uiContext, ExitForUpdate);
+            _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+            _templateHotkeyManager = new TemplateHotkeyManager(Log, _uiContext);
+            _updateManager = new TelegramUpdateManager(_baseDir, Log, _uiContext);
+            _appUpdateManager = new AppUpdateManager(Log, _uiContext, ExitForUpdate);
 
             _menu = new ContextMenuStrip();
 
@@ -132,6 +136,7 @@ namespace TelegramTrayLauncher
             };
 
             Log($"Tray icon created. Base directory: {_baseDir}");
+            InitializeBaseDirWatcher();
             _updateManager.Start();
             _appUpdateManager.Start();
         }
@@ -334,6 +339,7 @@ namespace TelegramTrayLauncher
             Log("ExitApplication called.");
             try
             {
+                DisposeBaseDirWatcher();
                 _overlayManager.HideOverlays();
                 _templateHotkeyManager.Dispose();
                 CloseAllTelegram();
@@ -356,6 +362,7 @@ namespace TelegramTrayLauncher
             Log("ExitForUpdate called.");
             try
             {
+                DisposeBaseDirWatcher();
                 _overlayManager.HideOverlays();
                 _templateHotkeyManager.Dispose();
             }
@@ -449,6 +456,7 @@ namespace TelegramTrayLauncher
 
             _baseDir = selected;
             _updateManager.UpdateBaseDir(_baseDir);
+            UpdateBaseDirWatcher(_baseDir);
             Log("Base directory updated: " + _baseDir);
         }
 
@@ -520,6 +528,112 @@ namespace TelegramTrayLauncher
             }
 
             return text.Trim();
+        }
+
+        private void InitializeBaseDirWatcher()
+        {
+            if (string.IsNullOrWhiteSpace(_baseDir) || !Directory.Exists(_baseDir))
+            {
+                return;
+            }
+
+            _baseDirRescanTimer = new System.Windows.Forms.Timer
+            {
+                Interval = 200
+            };
+            _baseDirRescanTimer.Tick += (_, __) => HandleBaseDirRescan();
+
+            _baseDirWatcher = new FileSystemWatcher(_baseDir)
+            {
+                IncludeSubdirectories = false,
+                NotifyFilter = NotifyFilters.DirectoryName
+            };
+            _baseDirWatcher.Created += OnBaseDirChanged;
+            _baseDirWatcher.Renamed += OnBaseDirChanged;
+            _baseDirWatcher.EnableRaisingEvents = true;
+        }
+
+        private void UpdateBaseDirWatcher(string newBaseDir)
+        {
+            DisposeBaseDirWatcher();
+            _baseDir = newBaseDir ?? string.Empty;
+            InitializeBaseDirWatcher();
+        }
+
+        private void DisposeBaseDirWatcher()
+        {
+            if (_baseDirWatcher != null)
+            {
+                _baseDirWatcher.EnableRaisingEvents = false;
+                _baseDirWatcher.Created -= OnBaseDirChanged;
+                _baseDirWatcher.Renamed -= OnBaseDirChanged;
+                _baseDirWatcher.Dispose();
+                _baseDirWatcher = null;
+            }
+
+            if (_baseDirRescanTimer != null)
+            {
+                _baseDirRescanTimer.Stop();
+                _baseDirRescanTimer.Dispose();
+                _baseDirRescanTimer = null;
+            }
+        }
+
+        private void OnBaseDirChanged(object? sender, FileSystemEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(e.FullPath) || !Directory.Exists(e.FullPath))
+            {
+                return;
+            }
+
+            ScheduleBaseDirRescan();
+        }
+
+        private void ScheduleBaseDirRescan()
+        {
+            if (SynchronizationContext.Current != _uiContext)
+            {
+                _uiContext.Post(_ => ScheduleBaseDirRescan(), null);
+                return;
+            }
+
+            lock (_baseDirRescanLock)
+            {
+                _baseDirRescanTimer?.Stop();
+                _baseDirRescanTimer?.Start();
+            }
+        }
+
+        private void HandleBaseDirRescan()
+        {
+            _baseDirRescanTimer?.Stop();
+            RefreshKnownAccountsFromDisk();
+        }
+
+        private void RefreshKnownAccountsFromDisk()
+        {
+            if (string.IsNullOrWhiteSpace(_baseDir) || !Directory.Exists(_baseDir))
+            {
+                return;
+            }
+
+            var executables = _processManager.DiscoverExecutables(_baseDir);
+            _settings = _settingsStore.Load();
+            bool added = false;
+            foreach (var exe in executables)
+            {
+                if (!_settings.AccountStates.ContainsKey(exe.Name))
+                {
+                    _settings.AccountStates[exe.Name] = new AccountState();
+                    added = true;
+                }
+            }
+
+            if (added)
+            {
+                _settingsStore.Save(_settings);
+                Log("New account folders detected, settings updated.");
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -25,6 +26,9 @@ namespace TelegramTrayLauncher
         private readonly ComboBox _removeGroupCombo;
         private readonly Button _removeGroupButton;
         private bool _hasChanges;
+        private FileSystemWatcher? _baseDirWatcher;
+        private System.Windows.Forms.Timer? _rescanTimer;
+        private readonly object _rescanLock = new object();
 
         public AccountManagerForm(string baseDir, TelegramProcessManager processManager, SettingsStore settingsStore, SettingsStore.Settings settings)
         {
@@ -142,6 +146,8 @@ namespace TelegramTrayLauncher
                     _settingsStore.Save(_settings);
                     DialogResult = DialogResult.OK;
                 }
+
+                DisposeWatcher();
             };
         }
 
@@ -151,16 +157,24 @@ namespace TelegramTrayLauncher
             EnsureAccountStates();
             RefreshRemoveGroupCombo();
             RefreshSections();
+            InitializeWatcher();
         }
 
         private void EnsureAccountStates()
         {
+            bool added = false;
             foreach (var exe in _executables)
             {
                 if (!_settings.AccountStates.ContainsKey(exe.Name))
                 {
                     _settings.AccountStates[exe.Name] = new AccountState();
+                    added = true;
                 }
+            }
+
+            if (added)
+            {
+                _hasChanges = true;
             }
         }
 
@@ -614,6 +628,92 @@ namespace TelegramTrayLauncher
             }
 
             return actions;
+        }
+
+        private void InitializeWatcher()
+        {
+            if (string.IsNullOrWhiteSpace(_baseDir) || !System.IO.Directory.Exists(_baseDir))
+            {
+                return;
+            }
+
+            _rescanTimer = new System.Windows.Forms.Timer
+            {
+                Interval = 200
+            };
+            _rescanTimer.Tick += (_, __) => HandleRescanTimer();
+
+            _baseDirWatcher = new FileSystemWatcher(_baseDir)
+            {
+                IncludeSubdirectories = false,
+                NotifyFilter = NotifyFilters.DirectoryName
+            };
+            _baseDirWatcher.Created += OnBaseDirChanged;
+            _baseDirWatcher.Renamed += OnBaseDirChanged;
+            _baseDirWatcher.EnableRaisingEvents = true;
+        }
+
+        private void DisposeWatcher()
+        {
+            if (_baseDirWatcher != null)
+            {
+                _baseDirWatcher.EnableRaisingEvents = false;
+                _baseDirWatcher.Created -= OnBaseDirChanged;
+                _baseDirWatcher.Renamed -= OnBaseDirChanged;
+                _baseDirWatcher.Dispose();
+                _baseDirWatcher = null;
+            }
+
+            if (_rescanTimer != null)
+            {
+                _rescanTimer.Stop();
+                _rescanTimer.Dispose();
+                _rescanTimer = null;
+            }
+        }
+
+        private void OnBaseDirChanged(object? sender, FileSystemEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(e.FullPath) || !System.IO.Directory.Exists(e.FullPath))
+            {
+                return;
+            }
+
+            ScheduleRescan();
+        }
+
+        private void ScheduleRescan()
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(ScheduleRescan));
+                return;
+            }
+
+            lock (_rescanLock)
+            {
+                _rescanTimer?.Stop();
+                _rescanTimer?.Start();
+            }
+        }
+
+        private void HandleRescanTimer()
+        {
+            _rescanTimer?.Stop();
+            RefreshFromDisk();
+        }
+
+        private void RefreshFromDisk()
+        {
+            if (string.IsNullOrWhiteSpace(_baseDir) || !System.IO.Directory.Exists(_baseDir))
+            {
+                return;
+            }
+
+            _executables = _processManager.DiscoverExecutables(_baseDir);
+            EnsureAccountStates();
+            RefreshRemoveGroupCombo();
+            RefreshSections();
         }
 
         private enum GroupKind
