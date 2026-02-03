@@ -31,7 +31,7 @@ namespace TelegramTrayLauncher
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            TopMost = true;
+            TopMost = false;
 
             _list = new ListBox
             {
@@ -71,13 +71,26 @@ namespace TelegramTrayLauncher
             Controls.Add(_closeButton);
             Controls.Add(_cancelButton);
 
-            _overlayManager.ShowForProcesses(entries.Select(e => e.Pid).ToList(), fromPids: true);
+            _overlayManager.ShowForEntries(entries, pid => CloseByPid(pid));
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
             _overlayManager.HideOverlays();
+        }
+
+        private void CloseByPid(int pid)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action<int>(CloseByPid), pid);
+                return;
+            }
+
+            _onCloseAccount(pid);
+            DialogResult = DialogResult.OK;
+            Close();
         }
 
         private void CloseSelected()

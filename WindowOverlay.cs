@@ -8,10 +8,12 @@ namespace TelegramTrayLauncher
     {
         private readonly string _label;
         private readonly Size _overlaySize = new Size(72, 72);
+        private readonly System.Action? _onClick;
 
-        private WindowOverlay(string label, Rectangle targetBounds)
+        private WindowOverlay(string label, Rectangle targetBounds, System.Action? onClick)
         {
             _label = label;
+            _onClick = onClick;
 
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -23,14 +25,12 @@ namespace TelegramTrayLauncher
             Opacity = 0.65;
 
             Size = _overlaySize;
-            Location = new Point(
-                targetBounds.Left + (targetBounds.Width - _overlaySize.Width) / 2,
-                targetBounds.Top + (targetBounds.Height - _overlaySize.Height) / 2);
+            UpdatePosition(targetBounds);
         }
 
-        public static WindowOverlay Create(Rectangle targetBounds, string label)
+        public static WindowOverlay Create(Rectangle targetBounds, string label, System.IntPtr targetWindow, System.Action? onClick)
         {
-            var overlay = new WindowOverlay(label, targetBounds);
+            var overlay = new WindowOverlay(label, targetBounds, onClick);
             overlay.CreateControl();
 
             // –ü–æ–∫–∞–∑—ã–≤–∞–µ–º –±–µ–∑ –∞–∫—Ç–∏–≤–∞—Ü–∏–∏, —á—Ç–æ–±—ã –Ω–µ –∑–∞–∫—Ä—ã–≤–∞—Ç—å –∫–æ–Ω—Ç–µ–∫—Å—Ç–Ω–æ–µ –º–µ–Ω—é
@@ -43,10 +43,32 @@ namespace TelegramTrayLauncher
                 overlay.Width,
                 overlay.Height,
                 NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+
+            // œÓÔÓ·ÛÂÏ ÔË‚ˇÁ‡Ú¸ Í ÓÍÌÛ-ˆÂÎË Ë ÔÂÂÌÂÒÚË Ì‡ Â„Ó ‡·Ó˜ËÈ ÒÚÓÎ.
+            if (targetWindow != System.IntPtr.Zero)
+            {
+                NativeMethods.TrySetWindowOwner(overlay.Handle, targetWindow);
+                if (NativeMethods.TryGetWindowDesktopId(targetWindow, out var desktopId))
+                {
+                    NativeMethods.TryMoveWindowToDesktop(overlay.Handle, desktopId);
+                }
+            }
+
+            if (onClick != null)
+            {
+                overlay.Cursor = Cursors.Hand;
+            }
             return overlay;
         }
 
-        protected override bool ShowWithoutActivation => true;
+        public void UpdatePosition(Rectangle targetBounds)
+        {
+            Location = new Point(
+                targetBounds.Left + (targetBounds.Width - _overlaySize.Width) / 2,
+                targetBounds.Top + (targetBounds.Height - _overlaySize.Height) / 2);
+        }
+
+        protected override bool ShowWithoutActivation => false;
 
         protected override CreateParams CreateParams
         {
@@ -54,10 +76,18 @@ namespace TelegramTrayLauncher
             {
                 var cp = base.CreateParams;
                 cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
-                cp.ExStyle |= 0x00000020; // WS_EX_TRANSPARENT
                 cp.ExStyle |= 0x00000008; // WS_EX_TOPMOST
-                cp.ExStyle |= unchecked((int)0x08000000); // WS_EX_NOACTIVATE, —á—Ç–æ–±—ã –Ω–µ –∑–∞–±–∏—Ä–∞—Ç—å —Ñ–æ–∫—É—Å –∏ –Ω–µ –∑–∞–∫—Ä—ã–≤–∞—Ç—å –º–µ–Ω—é
                 return cp;
+            }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_LBUTTONUP = 0x0202;
+            base.WndProc(ref m);
+            if (m.Msg == WM_LBUTTONUP)
+            {
+                _onClick?.Invoke();
             }
         }
 
@@ -80,3 +110,5 @@ namespace TelegramTrayLauncher
         }
     }
 }
+
+
