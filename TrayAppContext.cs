@@ -127,10 +127,10 @@ namespace TelegramTrayLauncher
             {
                 Icon = IconFactory.CreateTrayIcon(),
                 Visible = true,
-                Text = "Telegram launcher",
-                ContextMenuStrip = _menu
+                Text = "Telegram launcher"
             };
 
+            _notifyIcon.MouseUp += NotifyIconOnMouseUp;
             _notifyIcon.DoubleClick += (_, __) =>
             {
                 _notifyIcon.ShowBalloonTip(
@@ -404,7 +404,6 @@ namespace TelegramTrayLauncher
                 DisposeBaseDirWatcher();
                 _overlayManager.HideOverlays();
                 _templateHotkeyManager.Dispose();
-                CloseAllTelegram();
             }
             catch (Exception ex)
             {
@@ -412,6 +411,7 @@ namespace TelegramTrayLauncher
             }
             finally
             {
+                _notifyIcon.MouseUp -= NotifyIconOnMouseUp;
                 _notifyIcon.Visible = false;
                 _notifyIcon.Dispose();
                 Log("Application exiting.");
@@ -434,9 +434,41 @@ namespace TelegramTrayLauncher
             }
             finally
             {
+                _notifyIcon.MouseUp -= NotifyIconOnMouseUp;
                 _notifyIcon.Visible = false;
                 _notifyIcon.Dispose();
                 Application.Exit();
+            }
+        }
+
+        private void NotifyIconOnMouseUp(object? sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right)
+            {
+                return;
+            }
+
+            try
+            {
+                if (_menu.Visible)
+                {
+                    return;
+                }
+
+                _menu.Show(Cursor.Position);
+            }
+            catch (Exception ex)
+            {
+                Log("Failed to show tray context menu: " + ex.Message);
+                try
+                {
+                    _notifyIcon.Visible = false;
+                    _notifyIcon.Visible = true;
+                }
+                catch
+                {
+                    // ignore
+                }
             }
         }
 

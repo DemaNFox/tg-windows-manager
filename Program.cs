@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace TelegramTrayLauncher
@@ -11,6 +12,16 @@ namespace TelegramTrayLauncher
         [STAThread]
         private static void Main(string[] args)
         {
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (_, e) => ConsoleHelper.Log("UI thread exception: " + e.Exception);
+            AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+                ConsoleHelper.Log("Unhandled exception: " + (e.ExceptionObject?.ToString() ?? "unknown"));
+            TaskScheduler.UnobservedTaskException += (_, e) =>
+            {
+                ConsoleHelper.Log("Unobserved task exception: " + e.Exception);
+                e.SetObserved();
+            };
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
