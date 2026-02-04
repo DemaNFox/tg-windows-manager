@@ -17,6 +17,7 @@ namespace TelegramTrayLauncher
         {
             public string? Scale { get; set; }
             public bool TemplatesEnabled { get; set; } = true;
+            public string? LastSeenAboutVersion { get; set; }
             public List<TemplateSetting> Templates { get; set; } = new List<TemplateSetting>();
             public List<AccountGroup> AccountGroups { get; set; } = new List<AccountGroup>();
             public Dictionary<string, AccountState> AccountStates { get; set; } = new Dictionary<string, AccountState>(StringComparer.OrdinalIgnoreCase);
@@ -65,6 +66,9 @@ namespace TelegramTrayLauncher
             settings.Templates ??= new List<TemplateSetting>();
             settings.AccountGroups ??= new List<AccountGroup>();
             settings.AccountStates ??= new Dictionary<string, AccountState>(StringComparer.OrdinalIgnoreCase);
+            settings.LastSeenAboutVersion = string.IsNullOrWhiteSpace(settings.LastSeenAboutVersion)
+                ? null
+                : settings.LastSeenAboutVersion.Trim();
             EnsureDefaultTemplate(settings.Templates);
             NormalizeAccountGroups(settings.AccountGroups);
             NormalizeAccountStates(settings.AccountStates);

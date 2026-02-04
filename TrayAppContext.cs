@@ -137,6 +137,7 @@ namespace TelegramTrayLauncher
             };
 
             Log($"Tray icon created. Base directory: {_baseDir}");
+            ShowAboutOnFirstLaunchOrUpdate();
             InitializeBaseDirWatcher();
             _updateManager.Start();
             _appUpdateManager.Start();
@@ -546,6 +547,20 @@ namespace TelegramTrayLauncher
                 "Credential: DemaNFox";
 
             MessageBox.Show(message, "О программе", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void ShowAboutOnFirstLaunchOrUpdate()
+        {
+            string currentVersion = GetAppVersion();
+            string? lastSeenVersion = _settings.LastSeenAboutVersion;
+            if (string.Equals(lastSeenVersion, currentVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ShowAboutDialog();
+            _settings.LastSeenAboutVersion = currentVersion;
+            _settingsStore.Save(_settings);
         }
 
         private void InitializeBaseDirWatcher()

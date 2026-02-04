@@ -50,6 +50,7 @@ namespace TelegramTrayLauncher
 
                 string? assetUrl = null;
                 string? tagLabel = null;
+                ReleaseInfo? releaseInfo = null;
 
                 if (!string.IsNullOrWhiteSpace(config?.LocalPath))
                 {
@@ -71,6 +72,7 @@ namespace TelegramTrayLauncher
                         return;
                     }
 
+                    releaseInfo = release;
                     assetUrl = ResolveAssetUrl(release, config.AssetName);
                     if (string.IsNullOrWhiteSpace(assetUrl))
                     {
@@ -88,7 +90,7 @@ namespace TelegramTrayLauncher
                 }
 
                 bool shouldUpdate = await PromptYesNoAsync(
-                    $"\u0414\u043e\u0441\u0442\u0443\u043f\u043d\u0430 \u043d\u043e\u0432\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f ({tagLabel}). \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441?",
+                    BuildUpdatePromptText(tagLabel ?? "unknown", releaseInfo),
                     "Telegram Manager");
                 if (!shouldUpdate)
                 {
@@ -516,6 +518,7 @@ try {
                 }
 
                 string? tag = root.TryGetProperty("tag_name", out var tagProp) ? tagProp.GetString() : null;
+                string? body = root.TryGetProperty("body", out var bodyProp) ? bodyProp.GetString() : null;
                 var assets = new List<ReleaseAsset>();
 
                 if (root.TryGetProperty("assets", out var assetsProp) && assetsProp.ValueKind == JsonValueKind.Array)
@@ -531,7 +534,7 @@ try {
                     }
                 }
 
-                return new ReleaseInfo { Tag = tag ?? string.Empty, Assets = assets };
+                return new ReleaseInfo { Tag = tag ?? string.Empty, Body = body ?? string.Empty, Assets = assets };
             }
             catch (Exception ex)
             {
@@ -558,6 +561,70 @@ try {
             }, null);
 
             return tcs.Task;
+        }
+
+        private static string BuildUpdatePromptText(string tagLabel, ReleaseInfo? release)
+        {
+            var text = new StringBuilder();
+            text.Append("Доступна новая версия приложения (");
+            text.Append(tagLabel);
+            text.Append(").");
+
+            string notes = BuildReleaseNotesPreview(release?.Body);
+            if (!string.IsNullOrWhiteSpace(notes))
+            {
+                text.Append(Environment.NewLine);
+                text.Append(Environment.NewLine);
+                text.Append("Что изменилось:");
+                text.Append(Environment.NewLine);
+                text.Append(notes);
+            }
+
+            text.Append(Environment.NewLine);
+            text.Append(Environment.NewLine);
+            text.Append("Обновить сейчас?");
+            return text.ToString();
+        }
+
+        private static string BuildReleaseNotesPreview(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                return string.Empty;
+            }
+
+            string normalized = body.Replace("\r\n", "\n").Replace('\r', '\n');
+            var lines = normalized.Split('\n');
+            var cleaned = new List<string>();
+
+            foreach (var raw in lines)
+            {
+                string line = raw.Trim();
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                line = line.TrimStart('#', '-', '*', '>', ' ');
+                line = line.Trim();
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                if (line.Length > 140)
+                {
+                    line = line.Substring(0, 137).TrimEnd() + "...";
+                }
+
+                cleaned.Add("• " + line);
+                if (cleaned.Count >= 6)
+                {
+                    break;
+                }
+            }
+
+            return string.Join(Environment.NewLine, cleaned);
         }
 
         private void LogAppUpdateFailure(string message, Exception ex)
@@ -691,6 +758,7 @@ try {
     internal sealed class ReleaseInfo
     {
         public string Tag { get; set; } = string.Empty;
+        public string Body { get; set; } = string.Empty;
         public List<ReleaseAsset> Assets { get; set; } = new List<ReleaseAsset>();
     }
 
