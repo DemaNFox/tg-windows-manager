@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Reflection;
 
 namespace TelegramTrayLauncher
 {
@@ -42,6 +43,8 @@ namespace TelegramTrayLauncher
         private FileSystemWatcher? _baseDirWatcher;
         private System.Windows.Forms.Timer? _baseDirRescanTimer;
         private readonly object _baseDirRescanLock = new object();
+        private static readonly PropertyInfo? UpScrollButtonProperty = typeof(ToolStripDropDownMenu).GetProperty("UpScrollButton", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly PropertyInfo? DownScrollButtonProperty = typeof(ToolStripDropDownMenu).GetProperty("DownScrollButton", BindingFlags.Instance | BindingFlags.NonPublic);
 
         public TrayAppContext(bool useConsole, string baseDir)
         {
@@ -305,6 +308,7 @@ namespace TelegramTrayLauncher
             }
 
             menuItem.DropDownItems.Clear();
+            _settings = _settingsStore.Load();
             var executables = _processManager.DiscoverExecutables(_baseDir)
                 .Where(exe => IsAccountActive(exe.Name))
                 .ToList();
@@ -315,14 +319,68 @@ namespace TelegramTrayLauncher
             }
 
             var scale = NormalizeScale(_settings.Scale);
+            int preferredWidth = 280;
             foreach (var exe in executables)
             {
-                var item = new ToolStripMenuItem(exe.Name);
+                var groupLabel = GetAccountGroupLabel(exe.Name);
+                var item = new AccountMenuItem(exe.Name, groupLabel);
                 string path = exe.ExePath;
                 string workDir = exe.Directory;
                 item.Click += (_, __) => _processManager.StartSingle(path, workDir, scale);
                 menuItem.DropDownItems.Add(item);
+
+                string combined = exe.Name + " - " + groupLabel;
+                int lineWidth = TextRenderer.MeasureText(combined, menuItem.Font).Width + 56;
+                if (lineWidth > preferredWidth)
+                {
+                    preferredWidth = lineWidth;
+                }
             }
+
+            menuItem.DropDown.AutoSize = true;
+            menuItem.DropDown.MinimumSize = new Size(Math.Min(700, preferredWidth), 0);
+            menuItem.DropDown.MouseWheel -= OpenSingleDropDownOnMouseWheel;
+            menuItem.DropDown.MouseWheel += OpenSingleDropDownOnMouseWheel;
+        }
+
+        private void OpenSingleDropDownOnMouseWheel(object? sender, MouseEventArgs e)
+        {
+            if (sender is not ToolStripDropDownMenu dropDownMenu || e.Delta == 0)
+            {
+                return;
+            }
+
+            var buttonProperty = e.Delta > 0 ? UpScrollButtonProperty : DownScrollButtonProperty;
+            if (buttonProperty?.GetValue(dropDownMenu) is not ToolStripItem scrollButton)
+            {
+                return;
+            }
+
+            if (!scrollButton.Available || !scrollButton.Enabled)
+            {
+                return;
+            }
+
+            int steps = Math.Max(1, Math.Abs(e.Delta) / SystemInformation.MouseWheelScrollDelta);
+            for (int i = 0; i < steps; i++)
+            {
+                if (!scrollButton.Available || !scrollButton.Enabled)
+                {
+                    break;
+                }
+
+                scrollButton.PerformClick();
+            }
+        }
+
+        private string GetAccountGroupLabel(string accountName)
+        {
+            if (!_settings.AccountStates.TryGetValue(accountName, out var state) || state == null)
+            {
+                return GroupUngroupedLabel;
+            }
+
+            return string.IsNullOrWhiteSpace(state.GroupName) ? GroupUngroupedLabel : state.GroupName;
         }
 
         private void OpenAllAccounts()
@@ -668,6 +726,57 @@ namespace TelegramTrayLauncher
             {
                 _settingsStore.Save(_settings);
                 Log("New account folders detected, settings updated.");
+            }
+        }
+
+        private sealed class AccountMenuItem : ToolStripMenuItem
+        {
+            private readonly string _groupLabel;
+
+            public AccountMenuItem(string accountName, string groupLabel) : base(accountName)
+            {
+                _groupLabel = groupLabel;
+            }
+
+            private string SuffixText => string.IsNullOrWhiteSpace(_groupLabel) ? string.Empty : " - " + _groupLabel;
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var renderer = ToolStripManager.Renderer;
+                renderer.DrawMenuItemBackground(new ToolStripItemRenderEventArgs(e.Graphics, this));
+
+                var textBounds = ContentRectangle;
+                if (textBounds.Width <= 0 || textBounds.Height <= 0)
+                {
+                    return;
+                }
+
+                const TextFormatFlags mainFlags = TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+                var suffix = SuffixText;
+                var primaryColor = Enabled
+                    ? (Selected ? SystemColors.HighlightText : ForeColor)
+                    : SystemColors.GrayText;
+                var secondaryColor = Enabled
+                    ? (Selected ? Color.FromArgb(220, 220, 220) : SystemColors.GrayText)
+                    : SystemColors.GrayText;
+
+                if (string.IsNullOrEmpty(suffix))
+                {
+                    TextRenderer.DrawText(e.Graphics, Text, Font, textBounds, primaryColor, mainFlags);
+                    return;
+                }
+
+                int desiredSuffixWidth = TextRenderer.MeasureText(e.Graphics, suffix, Font, Size.Empty, mainFlags).Width;
+                int maxSuffixWidth = Math.Max(0, (int)(textBounds.Width * 0.45));
+                int minSuffixWidth = Math.Max(0, Math.Min(80, textBounds.Width / 2));
+                int suffixWidth = Math.Min(desiredSuffixWidth, maxSuffixWidth);
+                suffixWidth = Math.Max(suffixWidth, minSuffixWidth);
+                var accountBounds = new Rectangle(textBounds.Left, textBounds.Top, Math.Max(0, textBounds.Width - suffixWidth), textBounds.Height);
+                TextRenderer.DrawText(e.Graphics, Text, Font, accountBounds, primaryColor, mainFlags | TextFormatFlags.EndEllipsis);
+
+                int suffixX = accountBounds.Right;
+                var suffixBounds = new Rectangle(suffixX, textBounds.Top, Math.Max(0, textBounds.Right - suffixX), textBounds.Height);
+                TextRenderer.DrawText(e.Graphics, suffix, Font, suffixBounds, secondaryColor, mainFlags | TextFormatFlags.EndEllipsis | TextFormatFlags.Right);
             }
         }
     }
