@@ -600,9 +600,17 @@ namespace TelegramTrayLauncher
                 "Версия: " + version + Environment.NewLine +
                 Environment.NewLine +
                 "Последние изменения:" + Environment.NewLine +
-                "• Исправлено нажатие по окнам выбора аккаунтов на разных рабочих столах." + Environment.NewLine +
                 "• Добавлено автообновление списка аккаунтов при появлении новых папок." + Environment.NewLine +
+                "• Исправлена работа оверлея: клики и отслеживание на разных рабочих столах." + Environment.NewLine +
                 "• Добавлена подсказка в окне выбора аккаунта для закрытия Telegram." + Environment.NewLine +
+                "• Добавлено окно «О программе» в трее с версией и последними изменениями." + Environment.NewLine +
+                "• Инфо о программе показывается при первом запуске/обновлении; в диалог обновления добавлены release notes." + Environment.NewLine +
+                "• Добавлено окно прогресса в процессе обновления Telegram." + Environment.NewLine +
+                "• Добавлены групповые действия в Проводнике для папок аккаунтов." + Environment.NewLine +
+                "• Проверка обновлений Telegram теперь игнорирует prerelease-выпуски." + Environment.NewLine +
+                "• Убрано отладочное логирование в списке открытия аккаунтов." + Environment.NewLine +
+                "• Исправлена кодировка текстов в диалоге закрытия аккаунта." + Environment.NewLine +
+                "• Горячие клавиши шаблонов работают только когда активно окно Telegram." + Environment.NewLine +
                 Environment.NewLine +
                 "Credential: DemaNFox";
 
