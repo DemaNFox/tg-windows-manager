@@ -64,6 +64,7 @@ Only subfolders that contain a tdata directory are considered valid account fold
 
 - `AssetName` можно не указывать: тогда берётся первый asset с суффиксом `portable-win-x64.zip`.
 - После скачивания архив распаковывается во временную папку, файлы копируются в папку запуска, приложение перезапускается.
+- После подтверждения обновления показывается отдельное окно со шкалой прогресса (скачивание/подготовка/копирование).
 - app_update.json is included in publish output; update RepoOwner/RepoName if the repository changes.
 
 ## Версионирование

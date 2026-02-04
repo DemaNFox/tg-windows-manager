@@ -53,7 +53,6 @@ namespace TelegramTrayLauncher
 
                 string baseExePath = Path.Combine(AppContext.BaseDirectory, "assets", BaseTelegramFileName);
                 bool baseExists = File.Exists(baseExePath);
-                bool updated = false;
                 var missingTargets = GetMissingTargets();
 
                 UpdateInfo? updateInfo = null;
@@ -71,22 +70,19 @@ namespace TelegramTrayLauncher
                 if (!baseExists)
                 {
                     _log("Base Telegram.exe is missing. Downloading...");
-                    var downloadTask = DownloadAndReplaceAsync(baseExePath, updateInfo?.DownloadUrl ?? downloadUrl, updateInfo?.Sha256);
+                    await RunWithProgressFormAsync(form =>
+                        DownloadAndReplaceAsync(baseExePath, updateInfo?.DownloadUrl ?? downloadUrl, updateInfo?.Sha256, form));
 
                     if (missingTargets.Count > 0)
                     {
                         bool shouldInsert = await PromptYesNoAsync(
                             $"\u041d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d {BaseTelegramFileName} \u0432 {missingTargets.Count} \u043f\u0430\u043f\u043a\u0430\u0445. \u0421\u043a\u0430\u0447\u0430\u0442\u044c \u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u0444\u0430\u0439\u043b \u0438 \u043f\u043e\u0434\u0441\u0442\u0430\u0432\u0438\u0442\u044c \u0435\u0433\u043e? \u0418\u043b\u0438 \u0432\u044b \u043c\u043e\u0436\u0435\u0442\u0435 \u0441\u0430\u043c\u0438 \u0432\u0441\u0442\u0430\u0432\u0438\u0442\u044c {BaseTelegramFileName} \u0434\u043b\u044f \u0437\u0430\u043f\u0443\u0441\u043a\u0430 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432.",
                             "Telegram Manager");
-                        await downloadTask;
                         if (shouldInsert)
                         {
-                            CopyToTargets(baseExePath, missingTargets);
+                            await RunWithProgressFormAsync(form =>
+                                CopyToTargetsAsync(baseExePath, missingTargets, form));
                         }
-                    }
-                    else
-                    {
-                        await downloadTask;
                     }
 
                     return;
@@ -99,14 +95,12 @@ namespace TelegramTrayLauncher
                         "Telegram Manager");
                     if (shouldUpdate)
                     {
-                        await DownloadAndReplaceAsync(baseExePath, updateInfo.DownloadUrl ?? downloadUrl, updateInfo.Sha256);
-                        updated = true;
+                        await RunWithProgressFormAsync(async form =>
+                        {
+                            await DownloadAndReplaceAsync(baseExePath, updateInfo.DownloadUrl ?? downloadUrl, updateInfo.Sha256, form);
+                            await PropagateToTargetsAsync(baseExePath, replaceExisting: true, form);
+                        });
                     }
-                }
-
-                if (updated)
-                {
-                    await PropagateToTargetsAsync(baseExePath, replaceExisting: true);
                 }
             }
             catch (Exception ex)
@@ -131,24 +125,109 @@ namespace TelegramTrayLauncher
             return missing;
         }
 
-        private void CopyToTargets(string baseExePath, List<string> targets)
+        private Task CopyToTargetsAsync(string baseExePath, List<string> targets, UpdateProgressForm progressForm)
         {
-            foreach (var dir in targets)
-            {
-                TryCopy(baseExePath, Path.Combine(dir, BaseTelegramFileName), overwrite: false);
-            }
+            return CopyToTargetsCoreAsync(
+                baseExePath,
+                targets,
+                overwrite: false,
+                progressForm,
+                "Copying Telegram.exe to account folders...");
         }
 
-        private Task PropagateToTargetsAsync(string baseExePath, bool replaceExisting)
+        private Task PropagateToTargetsAsync(string baseExePath, bool replaceExisting, UpdateProgressForm progressForm)
         {
             var targets = GetTargetDirectories();
-            foreach (var dir in targets)
+            return CopyToTargetsCoreAsync(
+                baseExePath,
+                targets,
+                overwrite: replaceExisting,
+                progressForm,
+                "Applying Telegram update to account folders...");
+        }
+
+        private Task CopyToTargetsCoreAsync(
+            string baseExePath,
+            List<string> targets,
+            bool overwrite,
+            UpdateProgressForm progressForm,
+            string progressText)
+        {
+            if (targets.Count == 0)
             {
-                string targetExe = Path.Combine(dir, BaseTelegramFileName);
-                TryCopy(baseExePath, targetExe, overwrite: replaceExisting);
+                UpdateProgress(progressForm, progressText, 100, marquee: false);
+                return Task.CompletedTask;
+            }
+
+            UpdateProgress(progressForm, progressText, 0, marquee: false);
+            int total = targets.Count;
+            for (int i = 0; i < total; i++)
+            {
+                string targetExe = Path.Combine(targets[i], BaseTelegramFileName);
+                TryCopy(baseExePath, targetExe, overwrite);
+                int percent = (int)Math.Min(100, ((i + 1L) * 100) / total);
+                UpdateProgress(progressForm, progressText, percent, marquee: false);
             }
 
             return Task.CompletedTask;
+        }
+
+        private async Task RunWithProgressFormAsync(Func<UpdateProgressForm, Task> action)
+        {
+            var progressForm = await ShowProgressFormAsync();
+            try
+            {
+                await action(progressForm);
+            }
+            finally
+            {
+                CloseProgressForm(progressForm);
+            }
+        }
+
+        private Task<UpdateProgressForm> ShowProgressFormAsync()
+        {
+            var tcs = new TaskCompletionSource<UpdateProgressForm>();
+            _uiContext.Post(_ =>
+            {
+                try
+                {
+                    var form = new UpdateProgressForm();
+                    form.Show();
+                    tcs.TrySetResult(form);
+                }
+                catch (Exception ex)
+                {
+                    _log("Failed to show update progress: " + ex.Message);
+                    tcs.TrySetResult(new UpdateProgressForm());
+                }
+            }, null);
+
+            return tcs.Task;
+        }
+
+        private void UpdateProgress(UpdateProgressForm form, string text, int? percent, bool marquee)
+        {
+            _uiContext.Post(_ =>
+            {
+                if (form.IsDisposed)
+                {
+                    return;
+                }
+
+                form.SetProgress(text, percent, marquee);
+            }, null);
+        }
+
+        private void CloseProgressForm(UpdateProgressForm form)
+        {
+            _uiContext.Post(_ =>
+            {
+                if (!form.IsDisposed)
+                {
+                    form.Close();
+                }
+            }, null);
         }
 
         private List<string> GetTargetDirectories()
@@ -259,7 +338,7 @@ namespace TelegramTrayLauncher
             return !string.Equals(localText, remoteText, StringComparison.OrdinalIgnoreCase);
         }
 
-        internal async Task DownloadAndReplaceAsync(string targetPath, string downloadUrl, string? sha256)
+        internal async Task DownloadAndReplaceAsync(string targetPath, string downloadUrl, string? sha256, UpdateProgressForm? progressForm = null)
         {
             var targetDir = Path.GetDirectoryName(targetPath);
             if (!string.IsNullOrWhiteSpace(targetDir))
@@ -275,7 +354,7 @@ namespace TelegramTrayLauncher
                          downloadUrl.Contains("win64_portable", StringComparison.OrdinalIgnoreCase);
 
             using (var client = _httpClientFactory())
-            using (var response = await client.GetAsync(downloadUrl))
+            using (var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
                 var mediaType = response.Content.Headers.ContentType?.MediaType;
@@ -284,10 +363,35 @@ namespace TelegramTrayLauncher
                     isZip = true;
                 }
 
+                long? contentLength = response.Content.Headers.ContentLength;
+                if (progressForm != null)
+                {
+                    if (contentLength.HasValue && contentLength.Value > 0)
+                    {
+                        UpdateProgress(progressForm, "Downloading Telegram update...", 0, marquee: false);
+                    }
+                    else
+                    {
+                        UpdateProgress(progressForm, "Downloading Telegram update...", null, marquee: true);
+                    }
+                }
+
                 string savePath = isZip ? tempZipPath : tempPath;
                 await using var stream = await response.Content.ReadAsStreamAsync();
                 await using var file = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None);
-                await stream.CopyToAsync(file);
+                var buffer = new byte[81920];
+                int read;
+                long totalRead = 0;
+                while ((read = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    await file.WriteAsync(buffer, 0, read);
+                    if (progressForm != null && contentLength.HasValue && contentLength.Value > 0)
+                    {
+                        totalRead += read;
+                        int percent = (int)Math.Min(100, totalRead * 100 / contentLength.Value);
+                        UpdateProgress(progressForm, "Downloading Telegram update...", percent, marquee: false);
+                    }
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(sha256) && !isZip)
@@ -306,6 +410,11 @@ namespace TelegramTrayLauncher
                 Directory.CreateDirectory(extractRoot);
                 try
                 {
+                    if (progressForm != null)
+                    {
+                        UpdateProgress(progressForm, "Extracting Telegram update...", null, marquee: true);
+                    }
+
                     ZipFile.ExtractToDirectory(tempZipPath, extractRoot);
                     string? exePath = FindTelegramExe(extractRoot);
                     if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
@@ -313,6 +422,10 @@ namespace TelegramTrayLauncher
                         throw new FileNotFoundException("Telegram.exe not found in downloaded archive.");
                     }
 
+                    if (progressForm != null)
+                    {
+                        UpdateProgress(progressForm, "Applying Telegram update...", null, marquee: true);
+                    }
                     ReplaceFile(exePath, targetPath);
                 }
                 finally
@@ -323,7 +436,16 @@ namespace TelegramTrayLauncher
             }
             else
             {
+                if (progressForm != null)
+                {
+                    UpdateProgress(progressForm, "Applying Telegram update...", null, marquee: true);
+                }
                 ReplaceFile(tempPath, targetPath);
+            }
+
+            if (progressForm != null)
+            {
+                UpdateProgress(progressForm, "Telegram update completed.", 100, marquee: false);
             }
         }
 
@@ -477,6 +599,66 @@ namespace TelegramTrayLauncher
             }
 
             return builder.ToString();
+        }
+
+        internal sealed class UpdateProgressForm : Form
+        {
+            private readonly Label _label;
+            private readonly ProgressBar _progressBar;
+
+            public UpdateProgressForm()
+            {
+                FormBorderStyle = FormBorderStyle.FixedDialog;
+                StartPosition = FormStartPosition.CenterScreen;
+                ShowInTaskbar = false;
+                MaximizeBox = false;
+                MinimizeBox = false;
+                TopMost = true;
+                Width = 420;
+                Height = 140;
+                Text = "Telegram Manager";
+
+                _label = new Label
+                {
+                    Left = 16,
+                    Top = 16,
+                    Width = 372,
+                    Height = 36,
+                    Text = "Preparing update..."
+                };
+
+                _progressBar = new ProgressBar
+                {
+                    Left = 16,
+                    Top = 64,
+                    Width = 372,
+                    Height = 22,
+                    Minimum = 0,
+                    Maximum = 100,
+                    Style = ProgressBarStyle.Marquee
+                };
+
+                Controls.Add(_label);
+                Controls.Add(_progressBar);
+            }
+
+            public void SetProgress(string text, int? percent, bool marquee)
+            {
+                _label.Text = text;
+                if (marquee || !percent.HasValue)
+                {
+                    _progressBar.Style = ProgressBarStyle.Marquee;
+                    return;
+                }
+
+                if (_progressBar.Style != ProgressBarStyle.Continuous)
+                {
+                    _progressBar.Style = ProgressBarStyle.Continuous;
+                }
+
+                int value = Math.Max(_progressBar.Minimum, Math.Min(_progressBar.Maximum, percent.Value));
+                _progressBar.Value = value;
+            }
         }
     }
 
