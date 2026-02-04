@@ -264,44 +264,105 @@ namespace TelegramTrayLauncher
                 using var client = _httpClientFactory();
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("tg-manager");
                 string payload = await client.GetStringAsync(versionUrl);
-                payload = payload.Trim();
-
-                if (payload.StartsWith("{", StringComparison.Ordinal) || payload.StartsWith("[", StringComparison.Ordinal))
-                {
-                    using var doc = JsonDocument.Parse(payload);
-                    JsonElement root = doc.RootElement;
-                    if (root.ValueKind == JsonValueKind.Array && root.GetArrayLength() > 0)
-                    {
-                        root = root[0];
-                    }
-
-                    if (root.ValueKind == JsonValueKind.Object)
-                    {
-                        string? version = null;
-                        if (root.TryGetProperty("version", out var versionProp))
-                        {
-                            version = versionProp.GetString();
-                        }
-                        else if (root.TryGetProperty("tag_name", out var tagProp))
-                        {
-                            version = tagProp.GetString();
-                            if (!string.IsNullOrWhiteSpace(version) && version.StartsWith("v", StringComparison.OrdinalIgnoreCase))
-                            {
-                                version = version.Substring(1);
-                            }
-                        }
-
-                        return new UpdateInfo { Version = version };
-                    }
-                }
-
-                return new UpdateInfo { Version = payload };
+                return ParseUpdateInfoPayload(payload);
             }
             catch (Exception ex)
             {
                 _log("Failed to fetch update info: " + ex.Message);
                 return null;
             }
+        }
+
+        internal static UpdateInfo? ParseUpdateInfoPayload(string payload)
+        {
+            payload = (payload ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(payload))
+            {
+                return null;
+            }
+
+            if (payload.StartsWith("{", StringComparison.Ordinal) || payload.StartsWith("[", StringComparison.Ordinal))
+            {
+                using var doc = JsonDocument.Parse(payload);
+                JsonElement root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Array)
+                {
+                    return ParseReleaseArray(root);
+                }
+
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    return ParseReleaseObject(root);
+                }
+
+                return null;
+            }
+
+            return new UpdateInfo { Version = payload };
+        }
+
+        private static UpdateInfo? ParseReleaseArray(JsonElement releases)
+        {
+            JsonElement? fallback = null;
+            foreach (var item in releases.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                fallback ??= item;
+                bool isPrerelease = TryGetBooleanProperty(item, "prerelease");
+                bool isDraft = TryGetBooleanProperty(item, "draft");
+                if (!isPrerelease && !isDraft)
+                {
+                    return ParseReleaseObject(item);
+                }
+            }
+
+            return fallback.HasValue ? ParseReleaseObject(fallback.Value) : null;
+        }
+
+        private static UpdateInfo? ParseReleaseObject(JsonElement root)
+        {
+            string? version = null;
+            if (root.TryGetProperty("version", out var versionProp))
+            {
+                version = versionProp.GetString();
+            }
+            else if (root.TryGetProperty("tag_name", out var tagProp))
+            {
+                version = tagProp.GetString();
+            }
+
+            version = NormalizeVersion(version);
+            return new UpdateInfo { Version = version };
+        }
+
+        private static bool TryGetBooleanProperty(JsonElement root, string propertyName)
+        {
+            if (!root.TryGetProperty(propertyName, out var prop))
+            {
+                return false;
+            }
+
+            if (prop.ValueKind == JsonValueKind.True)
+            {
+                return true;
+            }
+
+            if (prop.ValueKind == JsonValueKind.False)
+            {
+                return false;
+            }
+
+            if (prop.ValueKind == JsonValueKind.String &&
+                bool.TryParse(prop.GetString(), out bool parsed))
+            {
+                return parsed;
+            }
+
+            return false;
         }
 
         private bool IsUpdateAvailable(string baseExePath, string? remoteVersion)

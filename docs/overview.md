@@ -83,3 +83,4 @@ Only subfolders that contain a tdata directory are considered valid account fold
 ## Explorer context menu update
 - Removed group deletion action from Explorer menu.
 - `Add to group` now includes default groups: `Заморозка` and `Вылеты`.
+- Telegram auto-update skips prerelease/draft entries when `VersionUrl` returns a releases array and prefers the latest stable release.
