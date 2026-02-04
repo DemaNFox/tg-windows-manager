@@ -23,7 +23,7 @@ namespace TelegramTrayLauncher
             _overlayManager = overlayManager;
             _onCloseAccount = onCloseAccount;
 
-            Text = "Выбор аккаунта";
+            Text = "\u0412\u044b\u0431\u043e\u0440 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430";
             Width = 360;
             Height = 280;
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -59,7 +59,7 @@ namespace TelegramTrayLauncher
 
             _closeButton = new Button
             {
-                Text = "Закрыть выбранный",
+                Text = "\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439",
                 Left = 140,
                 Width = 120,
                 Top = 210,
@@ -69,7 +69,7 @@ namespace TelegramTrayLauncher
 
             _cancelButton = new Button
             {
-                Text = "Отмена",
+                Text = "\u041e\u0442\u043c\u0435\u043d\u0430",
                 Left = 270,
                 Width = 70,
                 Top = 210,
