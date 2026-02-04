@@ -35,7 +35,7 @@ namespace TelegramTrayLauncher
         private readonly TemplateHotkeyManager _templateHotkeyManager;
         private readonly TelegramUpdateManager _updateManager;
         private readonly AppUpdateManager _appUpdateManager;
-        private readonly ToolStripMenuItem _versionMenuItem;
+        private readonly ToolStripMenuItem _aboutMenuItem;
         private SettingsStore.Settings _settings;
         private readonly bool _useConsole;
         private readonly SynchronizationContext _uiContext;
@@ -95,7 +95,8 @@ namespace TelegramTrayLauncher
             UpdateTemplatesToggleTitle();
             _templateHotkeyManager.Configure(_settings.Templates, _settings.TemplatesEnabled);
 
-            _versionMenuItem = new ToolStripMenuItem("Version: " + GetAppVersion()) { Enabled = false };
+            _aboutMenuItem = new ToolStripMenuItem("О программе");
+            _aboutMenuItem.Click += (_, __) => ShowAboutDialog();
 
             var exitItem = new ToolStripMenuItem("Выход");
             exitItem.Click += (_, __) => ExitApplication();
@@ -115,7 +116,7 @@ namespace TelegramTrayLauncher
             _menu.Items.Add(_templatesMenuItem);
             _menu.Items.Add(_templatesToggleItem);
             _menu.Items.Add(new ToolStripSeparator());
-            _menu.Items.Add(_versionMenuItem);
+            _menu.Items.Add(_aboutMenuItem);
             _menu.Items.Add(exitItem);
 
             _notifyIcon = new NotifyIcon
@@ -528,6 +529,23 @@ namespace TelegramTrayLauncher
             }
 
             return text.Trim();
+        }
+
+        private void ShowAboutDialog()
+        {
+            string version = GetAppVersion();
+            string message =
+                "Telegram Manager" + Environment.NewLine +
+                "Версия: " + version + Environment.NewLine +
+                Environment.NewLine +
+                "Последние изменения:" + Environment.NewLine +
+                "• Исправлено нажатие по окнам выбора аккаунтов на разных рабочих столах." + Environment.NewLine +
+                "• Добавлено автообновление списка аккаунтов при появлении новых папок." + Environment.NewLine +
+                "• Добавлена подсказка в окне выбора аккаунта для закрытия Telegram." + Environment.NewLine +
+                Environment.NewLine +
+                "Credential: DemaNFox";
+
+            MessageBox.Show(message, "О программе", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void InitializeBaseDirWatcher()
