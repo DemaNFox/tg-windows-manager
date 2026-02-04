@@ -33,12 +33,21 @@ namespace TelegramTrayLauncher
             ShowInTaskbar = false;
             TopMost = false;
 
-            _list = new ListBox
+            var instructionLabel = new Label
             {
                 Left = 10,
                 Top = 10,
                 Width = 330,
-                Height = 190
+                Height = 34,
+                Text = "Выберите окно из списка или нажмите на нужное окно (цифру)"
+            };
+
+            _list = new ListBox
+            {
+                Left = 10,
+                Top = 50,
+                Width = 330,
+                Height = 150
             };
 
             foreach (var entry in entries)
@@ -67,6 +76,7 @@ namespace TelegramTrayLauncher
                 DialogResult = DialogResult.Cancel
             };
 
+            Controls.Add(instructionLabel);
             Controls.Add(_list);
             Controls.Add(_closeButton);
             Controls.Add(_cancelButton);
@@ -108,3 +118,4 @@ namespace TelegramTrayLauncher
         }
     }
 }
+
