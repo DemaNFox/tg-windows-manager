@@ -69,3 +69,17 @@ Only subfolders that contain a tdata directory are considered valid account fold
 
 ## Версионирование
 Версия фиксируется локально в `TelegramTrayLauncher.csproj` (поле `<Version>`). Для релиза тег должен совпадать с этой версией (например, `v1.0.0`).
+
+## Explorer folder context menu
+- Added submenu `Telegram Manager` for directory right-click (`HKCU\Software\Classes\Directory\shell\TelegramManager`).
+- Commands:
+  - `--explorer-add-to-group "<folder>" "<group>"`
+  - `--explorer-remove-from-group "<folder>"`
+  - `--explorer-create-group-and-add "<folder>"`
+  - `--explorer-delete-group "<group>"`
+- Account-folder operations validate that folder contains both `Telegram.exe` and `tdata`.
+- New modules: `ExplorerContextMenuManager.cs`, `ExplorerGroupCommandHandler.cs`.
+
+## Explorer context menu update
+- Removed group deletion action from Explorer menu.
+- `Add to group` now includes default groups: `Заморозка` and `Вылеты`.

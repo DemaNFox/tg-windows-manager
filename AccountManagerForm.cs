@@ -144,6 +144,7 @@ namespace TelegramTrayLauncher
                 if (_hasChanges)
                 {
                     _settingsStore.Save(_settings);
+                    ExplorerContextMenuManager.InstallOrUpdate(_settings);
                     DialogResult = DialogResult.OK;
                 }
 

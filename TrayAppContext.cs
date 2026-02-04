@@ -51,6 +51,7 @@ namespace TelegramTrayLauncher
             _processManager = new TelegramProcessManager(Log);
             _overlayManager = new OverlayManager(Log);
             _settings = _settingsStore.Load();
+            ExplorerContextMenuManager.InstallOrUpdate(_settings, Log);
             _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             _templateHotkeyManager = new TemplateHotkeyManager(Log, _uiContext);
             _updateManager = new TelegramUpdateManager(_baseDir, Log, _uiContext);
@@ -161,6 +162,7 @@ namespace TelegramTrayLauncher
             if (form.ShowDialog() == DialogResult.OK)
             {
                 _settings = _settingsStore.Load();
+                ExplorerContextMenuManager.InstallOrUpdate(_settings, Log);
             }
         }
 

@@ -14,6 +14,11 @@ namespace TelegramTrayLauncher
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
+            if (ExplorerGroupCommandHandler.TryHandle(args))
+            {
+                return;
+            }
+
             bool useConsole = args != null &&
                               Array.Exists(args, a => a.Equals("-console", StringComparison.OrdinalIgnoreCase));
 
