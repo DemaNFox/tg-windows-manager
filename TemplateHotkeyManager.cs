@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -17,6 +18,7 @@ namespace TelegramTrayLauncher
         private const int WM_SYSKEYDOWN = 0x0104;
         private const int DefaultVariantCount = 200;
         private const int MaxVariantLength = 120;
+        private const string TelegramExeName = "Telegram.exe";
         private const string CompanyPlaceholder = "{\u043a\u043e\u043c\u043f\u0430\u043d\u0438\u044f}";
 
         private readonly Action<string> _log;
@@ -132,6 +134,13 @@ namespace TelegramTrayLauncher
                         return CallNextHookEx(_hookId, nCode, wParam, lParam);
                     }
 
+                    if (!IsTelegramForegroundWindow())
+                    {
+                        _pendingTemplate = null;
+                        _awaitingDefaultReplacement = false;
+                        return CallNextHookEx(_hookId, nCode, wParam, lParam);
+                    }
+
                     if (_pendingTemplate != null && key == Keys.Tab)
                     {
                         templateToSend = _pendingTemplate;
@@ -200,6 +209,16 @@ namespace TelegramTrayLauncher
                 {
                     try
                     {
+                        if (!IsTelegramForegroundWindow())
+                        {
+                            lock (_lock)
+                            {
+                                _pendingTemplate = null;
+                                _awaitingDefaultReplacement = false;
+                            }
+                            return;
+                        }
+
                         if (removeKeyStroke)
                         {
                             SendKeys.SendWait("{BACKSPACE}");
@@ -260,6 +279,17 @@ namespace TelegramTrayLauncher
                 {
                     try
                     {
+                        if (!IsTelegramForegroundWindow())
+                        {
+                            lock (_lock)
+                            {
+                                _pendingTemplate = null;
+                                _awaitingDefaultReplacement = false;
+                                _lastTemplateLength = 0;
+                            }
+                            return;
+                        }
+
                         if (_lastTemplateLength > 0)
                         {
                             var backspaces = new StringBuilder(_lastTemplateLength * 4);
@@ -308,6 +338,42 @@ namespace TelegramTrayLauncher
                      attempts < 10);
 
             return candidate;
+        }
+
+        private static bool IsTelegramForegroundWindow()
+        {
+            var foregroundWindow = GetForegroundWindow();
+            if (foregroundWindow == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            GetWindowThreadProcessId(foregroundWindow, out uint processId);
+            if (processId == 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                using var process = Process.GetProcessById((int)processId);
+                if (string.Equals(process.ProcessName, "Telegram", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                var fileName = process.MainModule?.FileName;
+                if (string.IsNullOrEmpty(fileName))
+                {
+                    return false;
+                }
+
+                return string.Equals(Path.GetFileName(fileName), TelegramExeName, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private List<string> BuildDefaultVariants(int count = DefaultVariantCount, bool filterNearDuplicates = true)
@@ -671,5 +737,11 @@ namespace TelegramTrayLauncher
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr GetModuleHandle(string? lpModuleName);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     }
 }
