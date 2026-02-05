@@ -40,9 +40,13 @@ namespace TelegramTrayLauncher
         private SettingsStore.Settings _settings;
         private readonly bool _useConsole;
         private readonly SynchronizationContext _uiContext;
+        private System.Threading.Timer? _accountRefreshTimer;
+        private int _accountRefreshInProgress;
         private FileSystemWatcher? _baseDirWatcher;
         private System.Windows.Forms.Timer? _baseDirRescanTimer;
         private readonly object _baseDirRescanLock = new object();
+        private int _baseDirRescanInProgress;
+        private int _baseDirRescanPending;
         private static readonly PropertyInfo? UpScrollButtonProperty = typeof(ToolStripDropDownMenu).GetProperty("UpScrollButton", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly PropertyInfo? DownScrollButtonProperty = typeof(ToolStripDropDownMenu).GetProperty("DownScrollButton", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -72,7 +76,7 @@ namespace TelegramTrayLauncher
             _closeSingleMenu.Click += (_, __) => OpenAccountCloseDialog();
 
             _closeAllMenu = new ToolStripMenuItem("Закрыть все аккаунты");
-            _closeAllMenu.Click += (_, __) => CloseAllTelegram();
+            _closeAllMenu.Click += (_, __) => QueueCloseAllTelegram();
 
             _openGroupMenuItem = new ToolStripMenuItem("Открыть группу");
             _openGroupMenuItem.DropDownOpening += (_, __) => PopulateGroupMenu(_openGroupMenuItem, StartGroupFromMenu);
@@ -127,10 +131,10 @@ namespace TelegramTrayLauncher
             {
                 Icon = IconFactory.CreateTrayIcon(),
                 Visible = true,
-                Text = "Telegram launcher"
+                Text = "Telegram launcher",
+                ContextMenuStrip = _menu
             };
 
-            _notifyIcon.MouseUp += NotifyIconOnMouseUp;
             _notifyIcon.DoubleClick += (_, __) =>
             {
                 _notifyIcon.ShowBalloonTip(
@@ -142,7 +146,7 @@ namespace TelegramTrayLauncher
 
             Log($"Tray icon created. Base directory: {_baseDir}");
             ShowAboutOnFirstLaunchOrUpdate();
-            InitializeBaseDirWatcher();
+            StartAccountRefreshPolling();
             _updateManager.Start();
             _appUpdateManager.Start();
         }
@@ -396,11 +400,48 @@ namespace TelegramTrayLauncher
             _processManager.CloseAllTelegram(_baseDir);
         }
 
+        private void QueueCloseAllTelegram()
+        {
+            Log("[DBG] QueueCloseAllTelegram queued.");
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(180);
+                _uiContext.Post(async _ => await CloseAllTelegramAsync(), null);
+            });
+        }
+
+        private async Task CloseAllTelegramAsync()
+        {
+            if (!_closeAllMenu.Enabled)
+            {
+                Log("[DBG] CloseAllTelegramAsync skipped: already running.");
+                return;
+            }
+
+            _closeAllMenu.Enabled = false;
+            try
+            {
+                Log("[DBG] CloseAllTelegramAsync started.");
+                await Task.Run(() => _processManager.CloseAllTelegram(_baseDir));
+                Log("[DBG] CloseAllTelegramAsync finished.");
+            }
+            catch (Exception ex)
+            {
+                Log("Ошибка закрытия всех аккаунтов: " + ex.Message);
+            }
+            finally
+            {
+                _closeAllMenu.Enabled = true;
+                Log("[DBG] CloseAllTelegramAsync UI state restored.");
+            }
+        }
+
         private void ExitApplication()
         {
             Log("ExitApplication called.");
             try
             {
+                DisposeAccountRefreshPolling();
                 DisposeBaseDirWatcher();
                 _overlayManager.HideOverlays();
                 _templateHotkeyManager.Dispose();
@@ -411,7 +452,6 @@ namespace TelegramTrayLauncher
             }
             finally
             {
-                _notifyIcon.MouseUp -= NotifyIconOnMouseUp;
                 _notifyIcon.Visible = false;
                 _notifyIcon.Dispose();
                 Log("Application exiting.");
@@ -424,6 +464,7 @@ namespace TelegramTrayLauncher
             Log("ExitForUpdate called.");
             try
             {
+                DisposeAccountRefreshPolling();
                 DisposeBaseDirWatcher();
                 _overlayManager.HideOverlays();
                 _templateHotkeyManager.Dispose();
@@ -434,41 +475,9 @@ namespace TelegramTrayLauncher
             }
             finally
             {
-                _notifyIcon.MouseUp -= NotifyIconOnMouseUp;
                 _notifyIcon.Visible = false;
                 _notifyIcon.Dispose();
                 Application.Exit();
-            }
-        }
-
-        private void NotifyIconOnMouseUp(object? sender, MouseEventArgs e)
-        {
-            if (e.Button != MouseButtons.Right)
-            {
-                return;
-            }
-
-            try
-            {
-                if (_menu.Visible)
-                {
-                    return;
-                }
-
-                _menu.Show(Cursor.Position);
-            }
-            catch (Exception ex)
-            {
-                Log("Failed to show tray context menu: " + ex.Message);
-                try
-                {
-                    _notifyIcon.Visible = false;
-                    _notifyIcon.Visible = true;
-                }
-                catch
-                {
-                    // ignore
-                }
             }
         }
 
@@ -550,8 +559,52 @@ namespace TelegramTrayLauncher
 
             _baseDir = selected;
             _updateManager.UpdateBaseDir(_baseDir);
-            UpdateBaseDirWatcher(_baseDir);
+            QueueAccountRefresh();
             Log("Base directory updated: " + _baseDir);
+        }
+
+        private void StartAccountRefreshPolling()
+        {
+            if (_accountRefreshTimer != null)
+            {
+                return;
+            }
+
+            _accountRefreshTimer = new System.Threading.Timer(
+                _ => QueueAccountRefresh(),
+                null,
+                TimeSpan.FromSeconds(3),
+                TimeSpan.FromSeconds(3));
+            Log("[DBG] Account refresh polling started.");
+        }
+
+        private void DisposeAccountRefreshPolling()
+        {
+            var timer = Interlocked.Exchange(ref _accountRefreshTimer, null);
+            if (timer != null)
+            {
+                timer.Dispose();
+            }
+        }
+
+        private void QueueAccountRefresh()
+        {
+            if (Interlocked.CompareExchange(ref _accountRefreshInProgress, 1, 0) != 0)
+            {
+                return;
+            }
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    RefreshKnownAccountsFromDisk();
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _accountRefreshInProgress, 0);
+                }
+            });
         }
 
         private string? NormalizeScale(string? scale)
@@ -629,24 +682,17 @@ namespace TelegramTrayLauncher
             string version = GetAppVersion();
             string message =
                 "Telegram Manager" + Environment.NewLine +
-                "Версия: " + version + Environment.NewLine +
+                "\u0412\u0435\u0440\u0441\u0438\u044f: " + version + Environment.NewLine +
                 Environment.NewLine +
-                "Последние изменения:" + Environment.NewLine +
-                "• Добавлено автообновление списка аккаунтов при появлении новых папок." + Environment.NewLine +
-                "• Исправлена работа оверлея: клики и отслеживание на разных рабочих столах." + Environment.NewLine +
-                "• Добавлена подсказка в окне выбора аккаунта для закрытия Telegram." + Environment.NewLine +
-                "• Добавлено окно «О программе» в трее с версией и последними изменениями." + Environment.NewLine +
-                "• Инфо о программе показывается при первом запуске/обновлении; в диалог обновления добавлены release notes." + Environment.NewLine +
-                "• Добавлено окно прогресса в процессе обновления Telegram." + Environment.NewLine +
-                "• Добавлены групповые действия в Проводнике для папок аккаунтов." + Environment.NewLine +
-                "• Проверка обновлений Telegram теперь игнорирует prerelease-выпуски." + Environment.NewLine +
-                "• Убрано отладочное логирование в списке открытия аккаунтов." + Environment.NewLine +
-                "• Исправлена кодировка текстов в диалоге закрытия аккаунта." + Environment.NewLine +
-                "• Горячие клавиши шаблонов работают только когда активно окно Telegram." + Environment.NewLine +
+                "\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f:" + Environment.NewLine +
+                "\u2022 \u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u0442\u0440\u0435\u044f: \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044f \u00ab\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u044b\u00bb \u0432\u044b\u043d\u0435\u0441\u0435\u043d\u0430 \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0431\u0435\u0437 \u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u043a\u0438 UI." + Environment.NewLine +
+                "\u2022 \u0410\u0432\u0442\u043e\u043f\u043e\u0434\u0445\u0432\u0430\u0442 \u043d\u043e\u0432\u044b\u0445 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432 \u043f\u0435\u0440\u0435\u0432\u0435\u0434\u0435\u043d \u043d\u0430 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u044b\u0439 polling (\u0431\u0435\u0437 FileSystemWatcher)." + Environment.NewLine +
+                "\u2022 \u041f\u0440\u0438 \u0432\u044b\u0445\u043e\u0434\u0435 \u0438\u0437 \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440\u0430 Telegram-\u0430\u043a\u043a\u0430\u0443\u043d\u0442\u044b \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435 \u0437\u0430\u043a\u0440\u044b\u0432\u0430\u044e\u0442\u0441\u044f." + Environment.NewLine +
+                "\u2022 \u041f\u0440\u043e\u0446\u0435\u0441\u0441 \u0440\u0435\u043b\u0438\u0437\u0430: \u043f\u0435\u0440\u0435\u0434 push \u043e\u0431\u043d\u043e\u0432\u043b\u044f\u0435\u043c About \u043f\u043e \u0432\u0441\u0435\u043c \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f\u043c \u0440\u0435\u043b\u0438\u0437\u0430." + Environment.NewLine +
                 Environment.NewLine +
                 "Credential: DemaNFox";
 
-            MessageBox.Show(message, "О программе", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(message, "\u041e \u043f\u0440\u043e\u0433\u0440\u0430\u043c\u043c\u0435", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void ShowAboutOnFirstLaunchOrUpdate()
@@ -732,6 +778,7 @@ namespace TelegramTrayLauncher
 
             lock (_baseDirRescanLock)
             {
+                Interlocked.Exchange(ref _baseDirRescanPending, 1);
                 _baseDirRescanTimer?.Stop();
                 _baseDirRescanTimer?.Start();
             }
@@ -740,7 +787,27 @@ namespace TelegramTrayLauncher
         private void HandleBaseDirRescan()
         {
             _baseDirRescanTimer?.Stop();
-            RefreshKnownAccountsFromDisk();
+            Interlocked.Exchange(ref _baseDirRescanPending, 0);
+            if (Interlocked.CompareExchange(ref _baseDirRescanInProgress, 1, 0) != 0)
+            {
+                return;
+            }
+
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    RefreshKnownAccountsFromDisk();
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _baseDirRescanInProgress, 0);
+                    if (Interlocked.Exchange(ref _baseDirRescanPending, 0) == 1)
+                    {
+                        _uiContext.Post(_ => ScheduleBaseDirRescan(), null);
+                    }
+                }
+            });
         }
 
         private void RefreshKnownAccountsFromDisk()
@@ -751,20 +818,21 @@ namespace TelegramTrayLauncher
             }
 
             var executables = _processManager.DiscoverExecutables(_baseDir);
-            _settings = _settingsStore.Load();
+            var settings = _settingsStore.Load();
             bool added = false;
             foreach (var exe in executables)
             {
-                if (!_settings.AccountStates.ContainsKey(exe.Name))
+                if (!settings.AccountStates.ContainsKey(exe.Name))
                 {
-                    _settings.AccountStates[exe.Name] = new AccountState();
+                    settings.AccountStates[exe.Name] = new AccountState();
                     added = true;
                 }
             }
 
             if (added)
             {
-                _settingsStore.Save(_settings);
+                _settingsStore.Save(settings);
+                _uiContext.Post(_ => _settings = settings, null);
                 Log("New account folders detected, settings updated.");
             }
         }

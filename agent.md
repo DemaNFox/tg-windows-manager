@@ -11,3 +11,4 @@
 - Настройки: `SettingsStore.cs` хранит (в `%APPDATA%/TelegramManager/settings.json`) масштаб `-scale`, используемый при запуске аккаунтов; обновляй описание при добавлении новых параметров.
 - Не комить без явного разрешения пользователя.
 - Release checklist: verify local app version, update all required places; only push when user explicitly asks.
+- Before each push/release, update About ("Последние изменения") to include all changes in that release.
