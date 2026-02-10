@@ -192,7 +192,15 @@ namespace TelegramTrayLauncher
                 {
                     WriteAppUpdateLog("Update script stderr: " + stderr.Trim());
                 }
-                throw new InvalidOperationException("Update script failed to start.");
+
+                // If the script process is still running, assume it started but was slow to create a log file.
+                // Proceed with exit so the script can complete the update.
+                if (process.HasExited)
+                {
+                    throw new InvalidOperationException("Update script failed to start.");
+                }
+
+                WriteAppUpdateLog("Update script did not create a log file in time, but the process is running. Exiting to apply update.");
             }
 
             _uiContext.Post(_ => _exitForUpdate(), null);
@@ -201,7 +209,7 @@ namespace TelegramTrayLauncher
         private bool WaitForUpdateScriptStart(Process process, string logPath)
         {
             var sw = Stopwatch.StartNew();
-            while (sw.Elapsed < TimeSpan.FromSeconds(3))
+            while (sw.Elapsed < TimeSpan.FromSeconds(8))
             {
                 if (File.Exists(logPath))
                 {
@@ -545,6 +553,12 @@ try {
 
         private Task<bool> PromptYesNoAsync(string text, string caption)
         {
+            if (IsAutoAcceptEnabled())
+            {
+                WriteAppUpdateLog("Auto-accepting app update prompt.");
+                return Task.FromResult(true);
+            }
+
             var tcs = new TaskCompletionSource<bool>();
             _uiContext.Post(_ =>
             {
@@ -561,6 +575,24 @@ try {
             }, null);
 
             return tcs.Task;
+        }
+
+        private static bool IsAutoAcceptEnabled()
+        {
+            string? value = Environment.GetEnvironmentVariable("TG_UPDATE_AUTO_ACCEPT");
+            string? test = Environment.GetEnvironmentVariable("TG_UPDATE_TEST");
+            if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(test))
+            {
+                return false;
+            }
+
+            bool accept = value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                          value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                          value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+            bool isTest = test.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                          test.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                          test.Equals("yes", StringComparison.OrdinalIgnoreCase);
+            return accept && isTest;
         }
 
         private static string BuildUpdatePromptText(string tagLabel, ReleaseInfo? release)

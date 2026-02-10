@@ -18,6 +18,7 @@ namespace TelegramTrayLauncher
             public string? Scale { get; set; }
             public bool TemplatesEnabled { get; set; } = true;
             public string? LastSeenAboutVersion { get; set; }
+            public int TelegramUpdateCheckFailures { get; set; }
             public List<TemplateSetting> Templates { get; set; } = new List<TemplateSetting>();
             public List<AccountGroup> AccountGroups { get; set; } = new List<AccountGroup>();
             public Dictionary<string, AccountState> AccountStates { get; set; } = new Dictionary<string, AccountState>(StringComparer.OrdinalIgnoreCase);

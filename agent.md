@@ -12,3 +12,4 @@
 - Не комить без явного разрешения пользователя.
 - Release checklist: verify local app version, update all required places; only push when user explicitly asks.
 - Before each push/release, update About ("Последние изменения") to include all changes in that release.
+- Always preserve correct file encodings (especially legacy cp1251/Windows-1251 files). Do not introduce encoding corruption; use proper encoding when editing.

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -30,6 +30,7 @@ namespace TelegramTrayLauncher
         private readonly ToolStripMenuItem _changeBaseDirMenuItem;
         private readonly ToolStripMenuItem _templatesMenuItem;
         private readonly ToolStripMenuItem _templatesToggleItem;
+        private readonly ToolStripMenuItem _checkTelegramUpdateMenuItem;
         private readonly TelegramProcessManager _processManager;
         private readonly OverlayManager _overlayManager;
         private readonly SettingsStore _settingsStore = new SettingsStore();
@@ -103,6 +104,9 @@ namespace TelegramTrayLauncher
             UpdateTemplatesToggleTitle();
             _templateHotkeyManager.Configure(_settings.Templates, _settings.TemplatesEnabled);
 
+            _checkTelegramUpdateMenuItem = new ToolStripMenuItem("Проверить обновления Telegram");
+            _checkTelegramUpdateMenuItem.Click += (_, __) => _updateManager.Start(userInitiated: true);
+
             _aboutMenuItem = new ToolStripMenuItem("О программе");
             _aboutMenuItem.Click += (_, __) => ShowAboutDialog();
 
@@ -123,6 +127,8 @@ namespace TelegramTrayLauncher
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_templatesMenuItem);
             _menu.Items.Add(_templatesToggleItem);
+            _menu.Items.Add(new ToolStripSeparator());
+            _menu.Items.Add(_checkTelegramUpdateMenuItem);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_aboutMenuItem);
             _menu.Items.Add(exitItem);
@@ -313,6 +319,7 @@ namespace TelegramTrayLauncher
 
             menuItem.DropDownItems.Clear();
             _settings = _settingsStore.Load();
+            var runningDirs = GetRunningTelegramDirectories();
             var executables = _processManager.DiscoverExecutables(_baseDir)
                 .Where(exe => IsAccountActive(exe.Name))
                 .ToList();
@@ -327,7 +334,8 @@ namespace TelegramTrayLauncher
             foreach (var exe in executables)
             {
                 var groupLabel = GetAccountGroupLabel(exe.Name);
-                var item = new AccountMenuItem(exe.Name, groupLabel);
+                bool isRunning = runningDirs.Contains(exe.Directory);
+                var item = new AccountMenuItem(exe.Name, groupLabel, isRunning);
                 string path = exe.ExePath;
                 string workDir = exe.Directory;
                 item.Click += (_, __) => _processManager.StartSingle(path, workDir, scale);
@@ -345,6 +353,8 @@ namespace TelegramTrayLauncher
             menuItem.DropDown.MinimumSize = new Size(Math.Min(700, preferredWidth), 0);
             menuItem.DropDown.MouseWheel -= OpenSingleDropDownOnMouseWheel;
             menuItem.DropDown.MouseWheel += OpenSingleDropDownOnMouseWheel;
+            menuItem.DropDownItems.Add(new ToolStripSeparator());
+            menuItem.DropDownItems.Add(new ToolStripMenuItem("О — открыт, З — закрыт") { Enabled = false });
         }
 
         private void OpenSingleDropDownOnMouseWheel(object? sender, MouseEventArgs e)
@@ -478,6 +488,11 @@ namespace TelegramTrayLauncher
                 _notifyIcon.Visible = false;
                 _notifyIcon.Dispose();
                 Application.Exit();
+                Task.Run(() =>
+                {
+                    Thread.Sleep(1500);
+                    Environment.Exit(0);
+                });
             }
         }
 
@@ -840,10 +855,12 @@ namespace TelegramTrayLauncher
         private sealed class AccountMenuItem : ToolStripMenuItem
         {
             private readonly string _groupLabel;
+            private readonly bool _isRunning;
 
-            public AccountMenuItem(string accountName, string groupLabel) : base(accountName)
+            public AccountMenuItem(string accountName, string groupLabel, bool isRunning) : base(accountName)
             {
                 _groupLabel = groupLabel;
+                _isRunning = isRunning;
             }
 
             private string SuffixText => string.IsNullOrWhiteSpace(_groupLabel) ? string.Empty : " - " + _groupLabel;
@@ -861,31 +878,77 @@ namespace TelegramTrayLauncher
 
                 const TextFormatFlags mainFlags = TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
                 var suffix = SuffixText;
+                var statusText = _isRunning ? "\u041e" : "\u0417";
                 var primaryColor = Enabled
                     ? (Selected ? SystemColors.HighlightText : ForeColor)
                     : SystemColors.GrayText;
                 var secondaryColor = Enabled
                     ? (Selected ? Color.FromArgb(220, 220, 220) : SystemColors.GrayText)
                     : SystemColors.GrayText;
+                var statusColor = _isRunning
+                    ? (Selected ? SystemColors.HighlightText : Color.ForestGreen)
+                    : (Selected ? SystemColors.HighlightText : Color.DarkRed);
+
+                int statusWidth = TextRenderer.MeasureText(e.Graphics, statusText, Font, Size.Empty, mainFlags).Width + 12;
+                statusWidth = Math.Max(20, statusWidth);
+                var statusBounds = new Rectangle(
+                    textBounds.Right - statusWidth,
+                    textBounds.Top,
+                    statusWidth,
+                    textBounds.Height);
+
+                int availableWidth = Math.Max(0, textBounds.Width - statusWidth);
+                var contentBounds = new Rectangle(textBounds.Left, textBounds.Top, availableWidth, textBounds.Height);
 
                 if (string.IsNullOrEmpty(suffix))
                 {
-                    TextRenderer.DrawText(e.Graphics, Text, Font, textBounds, primaryColor, mainFlags);
+                    TextRenderer.DrawText(e.Graphics, Text, Font, contentBounds, primaryColor, mainFlags | TextFormatFlags.EndEllipsis);
+                    TextRenderer.DrawText(e.Graphics, statusText, Font, statusBounds, statusColor, mainFlags | TextFormatFlags.Right);
                     return;
                 }
 
                 int desiredSuffixWidth = TextRenderer.MeasureText(e.Graphics, suffix, Font, Size.Empty, mainFlags).Width;
-                int maxSuffixWidth = Math.Max(0, (int)(textBounds.Width * 0.45));
-                int minSuffixWidth = Math.Max(0, Math.Min(80, textBounds.Width / 2));
+                int maxSuffixWidth = Math.Max(0, (int)(contentBounds.Width * 0.45));
+                int minSuffixWidth = Math.Max(0, Math.Min(80, contentBounds.Width / 2));
                 int suffixWidth = Math.Min(desiredSuffixWidth, maxSuffixWidth);
                 suffixWidth = Math.Max(suffixWidth, minSuffixWidth);
-                var accountBounds = new Rectangle(textBounds.Left, textBounds.Top, Math.Max(0, textBounds.Width - suffixWidth), textBounds.Height);
+                var accountBounds = new Rectangle(contentBounds.Left, contentBounds.Top, Math.Max(0, contentBounds.Width - suffixWidth), contentBounds.Height);
                 TextRenderer.DrawText(e.Graphics, Text, Font, accountBounds, primaryColor, mainFlags | TextFormatFlags.EndEllipsis);
 
                 int suffixX = accountBounds.Right;
-                var suffixBounds = new Rectangle(suffixX, textBounds.Top, Math.Max(0, textBounds.Right - suffixX), textBounds.Height);
+                var suffixBounds = new Rectangle(suffixX, contentBounds.Top, Math.Max(0, contentBounds.Right - suffixX), contentBounds.Height);
                 TextRenderer.DrawText(e.Graphics, suffix, Font, suffixBounds, secondaryColor, mainFlags | TextFormatFlags.EndEllipsis | TextFormatFlags.Right);
+                TextRenderer.DrawText(e.Graphics, statusText, Font, statusBounds, statusColor, mainFlags | TextFormatFlags.Right);
             }
+        }
+
+        private HashSet<string> GetRunningTelegramDirectories()
+        {
+            var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var processes = _processManager.GetTrackedTelegramProcesses(_baseDir);
+            foreach (var process in processes)
+            {
+                try
+                {
+                    var path = process.MainModule?.FileName;
+                    if (string.IsNullOrWhiteSpace(path))
+                    {
+                        continue;
+                    }
+
+                    var dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrWhiteSpace(dir))
+                    {
+                        result.Add(dir);
+                    }
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+
+            return result;
         }
     }
 

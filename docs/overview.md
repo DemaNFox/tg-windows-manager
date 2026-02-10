@@ -65,6 +65,8 @@ Only subfolders that contain a tdata directory are considered valid account fold
 - `AssetName` можно не указывать: тогда берётся первый asset с суффиксом `portable-win-x64.zip`.
 - После скачивания архив распаковывается во временную папку, файлы копируются в папку запуска, приложение перезапускается.
 - После подтверждения обновления показывается отдельное окно со шкалой прогресса (скачивание/подготовка/копирование).
+- If the update script starts, the app forces exit as a fallback so the update can apply.
+- On update errors a message is shown; details in pp_update.log.
 - app_update.json is included in publish output; update RepoOwner/RepoName if the repository changes.
 
 ## Версионирование
@@ -84,3 +86,9 @@ Only subfolders that contain a tdata directory are considered valid account fold
 - Removed group deletion action from Explorer menu.
 - `Add to group` now includes default groups: `Заморозка` and `Вылеты`.
 - Telegram auto-update skips prerelease/draft entries when `VersionUrl` returns a releases array and prefers the latest stable release.
+
+## Telegram update
+- В меню добавлено: Проверить обновления Telegram.
+- При старте делает до 3 попыток проверки версии; сообщение об ошибке показывается только при ручной проверке или после 3 подряд неудач.
+- While updating, running Telegram windows are closed and then restarted.
+- On update errors a message is shown; details in 	elegram_update.log.

@@ -19,11 +19,14 @@ namespace TelegramTrayLauncher
         private const string TempFileSuffix = ".download";
         private const string DefaultDownloadUrl = "https://telegram.org/dl/desktop/win64_portable";
         private const string DefaultVersionUrl = "https://api.github.com/repos/telegramdesktop/tdesktop/releases";
+        private const int VersionCheckFailureThreshold = 3;
 
         private string _baseDir;
         private readonly Action<string> _log;
         private readonly SynchronizationContext _uiContext;
         private readonly Func<HttpClient> _httpClientFactory;
+        private readonly SettingsStore _settingsStore = new SettingsStore();
+        private int _updateInProgress;
 
         public TelegramUpdateManager(string baseDir, Action<string> log, SynchronizationContext uiContext, Func<HttpClient>? httpClientFactory = null)
         {
@@ -40,10 +43,21 @@ namespace TelegramTrayLauncher
 
         public void Start()
         {
-            _ = Task.Run(RunAsync);
+            Start(userInitiated: false);
         }
 
-        private async Task RunAsync()
+        public void Start(bool userInitiated)
+        {
+            if (Interlocked.CompareExchange(ref _updateInProgress, 1, 0) != 0)
+            {
+                _log("Telegram update skipped: another update is already running.");
+                return;
+            }
+
+            _ = Task.Run(() => RunAsync(userInitiated));
+        }
+
+        private async Task RunAsync(bool userInitiated)
         {
             try
             {
@@ -56,9 +70,11 @@ namespace TelegramTrayLauncher
                 var missingTargets = GetMissingTargets();
 
                 UpdateInfo? updateInfo = null;
+                bool versionCheckAttempted = false;
                 if (!string.IsNullOrWhiteSpace(versionUrl))
                 {
-                    updateInfo = await FetchUpdateInfoAsync(versionUrl);
+                    versionCheckAttempted = true;
+                    updateInfo = await FetchUpdateInfoWithRetriesAsync(versionUrl, attempts: 3);
                 }
 
                 if (string.IsNullOrWhiteSpace(downloadUrl))
@@ -88,6 +104,11 @@ namespace TelegramTrayLauncher
                     return;
                 }
 
+                if (updateInfo != null)
+                {
+                    RecordVersionCheckResult(success: true);
+                }
+
                 if (updateInfo != null && IsUpdateAvailable(baseExePath, updateInfo.Version))
                 {
                     bool shouldUpdate = await PromptYesNoAsync(
@@ -95,17 +116,46 @@ namespace TelegramTrayLauncher
                         "Telegram Manager");
                     if (shouldUpdate)
                     {
+                        var running = CloseRunningTelegrams();
                         await RunWithProgressFormAsync(async form =>
                         {
                             await DownloadAndReplaceAsync(baseExePath, updateInfo.DownloadUrl ?? downloadUrl, updateInfo.Sha256, form);
                             await PropagateToTargetsAsync(baseExePath, replaceExisting: true, form);
                         });
+                        RestartTelegrams(running);
+                    }
+                    return;
+                }
+                else if (versionCheckAttempted && updateInfo == null)
+                {
+                    _log("Telegram update skipped: failed to fetch version info.");
+                    HandleVersionCheckFailure(userInitiated);
+                }
+
+                var outdatedTargets = GetOutdatedTargets(baseExePath);
+                if (outdatedTargets.Count > 0)
+                {
+                    bool shouldSync = await PromptYesNoAsync(
+                        "\u041d\u0430\u0439\u0434\u0435\u043d\u044b \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u044b \u0441 \u0443\u0441\u0442\u0430\u0440\u0435\u0432\u0448\u0438\u043c Telegram. \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c \u0441\u0435\u0439\u0447\u0430\u0441?",
+                        "Telegram Manager");
+                    if (shouldSync)
+                    {
+                        var running = CloseRunningTelegrams();
+                        await RunWithProgressFormAsync(form =>
+                            CopyToTargetsCoreAsync(baseExePath, outdatedTargets, overwrite: true, form,
+                                "Applying Telegram update to account folders..."));
+                        RestartTelegrams(running);
                     }
                 }
             }
             catch (Exception ex)
             {
                 LogUpdateFailure("Telegram update failed.", ex);
+                TryShowUpdateError("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u043d\u043e\u0432\u0438\u0442\u044c Telegram. \u041f\u043e\u0434\u0440\u043e\u0431\u043d\u043e\u0441\u0442\u0438 \u0432 telegram_update.log.");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _updateInProgress, 0);
             }
         }
 
@@ -123,6 +173,53 @@ namespace TelegramTrayLauncher
             }
 
             return missing;
+        }
+
+        private List<string> GetOutdatedTargets(string baseExePath)
+        {
+            var targets = GetTargetDirectories();
+            var outdated = new List<string>();
+            if (targets.Count == 0 || !File.Exists(baseExePath))
+            {
+                return outdated;
+            }
+
+            string? baseVersion = GetFileVersionText(baseExePath);
+            string? baseHash = string.IsNullOrWhiteSpace(baseVersion) ? GetFileHashSafe(baseExePath) : null;
+            foreach (var dir in targets)
+            {
+                string targetExe = Path.Combine(dir, BaseTelegramFileName);
+                if (!File.Exists(targetExe))
+                {
+                    outdated.Add(dir);
+                    continue;
+                }
+
+                string? targetVersion = GetFileVersionText(targetExe);
+                if (!string.IsNullOrWhiteSpace(baseVersion))
+                {
+                    if (IsVersionOlder(targetVersion, baseVersion))
+                    {
+                        outdated.Add(dir);
+                    }
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(baseHash))
+                {
+                    outdated.Add(dir);
+                    continue;
+                }
+
+                string? targetHash = GetFileHashSafe(targetExe);
+                if (string.IsNullOrWhiteSpace(targetHash) ||
+                    !string.Equals(baseHash, targetHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    outdated.Add(dir);
+                }
+            }
+
+            return outdated;
         }
 
         private Task CopyToTargetsAsync(string baseExePath, List<string> targets, UpdateProgressForm progressForm)
@@ -273,6 +370,27 @@ namespace TelegramTrayLauncher
             }
         }
 
+        private async Task<UpdateInfo?> FetchUpdateInfoWithRetriesAsync(string versionUrl, int attempts)
+        {
+            attempts = Math.Max(1, attempts);
+            for (int i = 1; i <= attempts; i++)
+            {
+                var info = await FetchUpdateInfoAsync(versionUrl);
+                if (info != null)
+                {
+                    return info;
+                }
+
+                if (i < attempts)
+                {
+                    int delayMs = i == 1 ? 2000 : i == 2 ? 5000 : 10000;
+                    await Task.Delay(delayMs);
+                }
+            }
+
+            return null;
+        }
+
         internal static UpdateInfo? ParseUpdateInfoPayload(string payload)
         {
             payload = (payload ?? string.Empty).Trim();
@@ -367,17 +485,7 @@ namespace TelegramTrayLauncher
 
         private bool IsUpdateAvailable(string baseExePath, string? remoteVersion)
         {
-            string? localVersion = null;
-            try
-            {
-                var info = FileVersionInfo.GetVersionInfo(baseExePath);
-                localVersion = info.FileVersion ?? info.ProductVersion;
-            }
-            catch
-            {
-                // ignore
-            }
-
+            string? localVersion = GetFileVersionText(baseExePath);
             string remoteText = NormalizeVersion(remoteVersion);
             if (string.IsNullOrWhiteSpace(remoteText))
             {
@@ -397,6 +505,55 @@ namespace TelegramTrayLauncher
             }
 
             return !string.Equals(localText, remoteText, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? GetFileVersionText(string path)
+        {
+            try
+            {
+                var info = FileVersionInfo.GetVersionInfo(path);
+                return info.FileVersion ?? info.ProductVersion;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool IsVersionOlder(string? current, string? baseline)
+        {
+            string currentText = NormalizeVersion(current);
+            string baselineText = NormalizeVersion(baseline);
+
+            if (string.IsNullOrWhiteSpace(baselineText))
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(currentText))
+            {
+                return true;
+            }
+
+            if (Version.TryParse(currentText, out var currentVer) &&
+                Version.TryParse(baselineText, out var baselineVer))
+            {
+                return currentVer < baselineVer;
+            }
+
+            return !string.Equals(currentText, baselineText, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? GetFileHashSafe(string path)
+        {
+            try
+            {
+                return ComputeSha256(path);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         internal async Task DownloadAndReplaceAsync(string targetPath, string downloadUrl, string? sha256, UpdateProgressForm? progressForm = null)
@@ -587,6 +744,12 @@ namespace TelegramTrayLauncher
 
         private Task<bool> PromptYesNoAsync(string text, string caption)
         {
+            if (IsAutoAcceptEnabled())
+            {
+                _log("Auto-accepting Telegram update prompt.");
+                return Task.FromResult(true);
+            }
+
             var tcs = new TaskCompletionSource<bool>();
             _uiContext.Post(_ =>
             {
@@ -603,6 +766,207 @@ namespace TelegramTrayLauncher
             }, null);
 
             return tcs.Task;
+        }
+
+        private sealed record RunningTelegram(string ExePath, string WorkDir);
+
+        private List<RunningTelegram> CloseRunningTelegrams()
+        {
+            var result = new List<RunningTelegram>();
+            if (string.IsNullOrWhiteSpace(_baseDir) || !Directory.Exists(_baseDir))
+            {
+                return result;
+            }
+
+            var baseDirFull = Path.GetFullPath(_baseDir)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+
+            foreach (var process in Process.GetProcessesByName("Telegram"))
+            {
+                string? exePath = null;
+                try
+                {
+                    exePath = process.MainModule?.FileName;
+                }
+                catch
+                {
+                    // ignore access errors
+                }
+
+                if (string.IsNullOrWhiteSpace(exePath))
+                {
+                    continue;
+                }
+
+                string? workDir = null;
+                try
+                {
+                    workDir = Path.GetDirectoryName(exePath);
+                }
+                catch
+                {
+                    // ignore
+                }
+
+                if (string.IsNullOrWhiteSpace(workDir))
+                {
+                    continue;
+                }
+
+                string fullWorkDir;
+                try
+                {
+                    fullWorkDir = Path.GetFullPath(workDir)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                        + Path.DirectorySeparatorChar;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (!fullWorkDir.StartsWith(baseDirFull, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!Directory.Exists(Path.Combine(workDir, "tdata")))
+                {
+                    continue;
+                }
+
+                result.Add(new RunningTelegram(exePath, workDir));
+                TryCloseProcess(process);
+            }
+
+            return result;
+        }
+
+        private static void TryCloseProcess(Process process)
+        {
+            try
+            {
+                process.CloseMainWindow();
+            }
+            catch
+            {
+                // ignore
+            }
+
+            try
+            {
+                if (!process.WaitForExit(300))
+                {
+                    process.Kill(true);
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private void RestartTelegrams(List<RunningTelegram> executables)
+        {
+            if (executables.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var entry in executables)
+            {
+                try
+                {
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = entry.ExePath,
+                        WorkingDirectory = entry.WorkDir
+                    };
+                    Process.Start(startInfo);
+                }
+                catch (Exception ex)
+                {
+                    _log("Failed to restart Telegram: " + ex.Message);
+                }
+            }
+        }
+
+        private static bool IsAutoAcceptEnabled()
+        {
+            string? value = Environment.GetEnvironmentVariable("TG_UPDATE_AUTO_ACCEPT");
+            string? test = Environment.GetEnvironmentVariable("TG_UPDATE_TEST");
+            if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(test))
+            {
+                return false;
+            }
+
+            bool accept = value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                          value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                          value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+            bool isTest = test.Equals("1", StringComparison.OrdinalIgnoreCase) ||
+                          test.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                          test.Equals("yes", StringComparison.OrdinalIgnoreCase);
+            return accept && isTest;
+        }
+
+        private void RecordVersionCheckResult(bool success)
+        {
+            if (!success)
+            {
+                return;
+            }
+
+            try
+            {
+                var settings = _settingsStore.Load();
+                if (settings.TelegramUpdateCheckFailures != 0)
+                {
+                    settings.TelegramUpdateCheckFailures = 0;
+                    _settingsStore.Save(settings);
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        private void HandleVersionCheckFailure(bool userInitiated)
+        {
+            int failures = 0;
+            try
+            {
+                var settings = _settingsStore.Load();
+                settings.TelegramUpdateCheckFailures += 1;
+                failures = settings.TelegramUpdateCheckFailures;
+                _settingsStore.Save(settings);
+            }
+            catch
+            {
+                failures = 0;
+            }
+
+            if (!userInitiated && failures < VersionCheckFailureThreshold)
+            {
+                return;
+            }
+
+            if (!userInitiated)
+            {
+                try
+                {
+                    var settings = _settingsStore.Load();
+                    settings.TelegramUpdateCheckFailures = 0;
+                    _settingsStore.Save(settings);
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+
+            TryShowUpdateError("\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f Telegram. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0438\u043d\u0442\u0435\u0440\u043d\u0435\u0442 \u0438\u043b\u0438 \u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u043f\u043e\u0437\u0436\u0435.");
         }
 
         private static string NormalizeVersion(string? value)
@@ -646,6 +1010,21 @@ namespace TelegramTrayLauncher
             {
                 // ignore logging failures
             }
+        }
+
+        private void TryShowUpdateError(string message)
+        {
+            _uiContext.Post(_ =>
+            {
+                try
+                {
+                    MessageBox.Show(message, "Telegram Manager", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                catch
+                {
+                    // ignore UI failures
+                }
+            }, null);
         }
 
         private static string ComputeSha256(string filePath)
