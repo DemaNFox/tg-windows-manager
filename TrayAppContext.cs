@@ -20,6 +20,7 @@ namespace TelegramTrayLauncher
         private readonly ContextMenuStrip _menu;
         private readonly ToolStripMenuItem _openAllMenu;
         private readonly ToolStripMenuItem _openSingleMenu;
+        private readonly ToolStripMenuItem _openGroupAccountMenu;
         private readonly ToolStripMenuItem _closeSingleMenu;
         private readonly ToolStripMenuItem _closeAllMenu;
         private readonly ToolStripMenuItem _openGroupMenuItem;
@@ -73,6 +74,9 @@ namespace TelegramTrayLauncher
             _openSingleMenu = new ToolStripMenuItem("Открыть аккаунт");
             _openSingleMenu.DropDownOpening += OpenSingleMenuOnDropDownOpening;
 
+            _openGroupAccountMenu = new ToolStripMenuItem("Открыть аккаунт группы");
+            _openGroupAccountMenu.DropDownOpening += OpenGroupAccountMenuOnDropDownOpening;
+
             _closeSingleMenu = new ToolStripMenuItem("Закрыть выбранный аккаунт");
             _closeSingleMenu.Click += (_, __) => OpenAccountCloseDialog();
 
@@ -117,6 +121,7 @@ namespace TelegramTrayLauncher
             _menu.Items.Add(_closeAllMenu);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_openSingleMenu);
+            _menu.Items.Add(_openGroupAccountMenu);
             _menu.Items.Add(_closeSingleMenu);
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(_openGroupMenuItem);
@@ -199,12 +204,7 @@ namespace TelegramTrayLauncher
             ungrouped.Click += (_, __) => action(GroupUngroupedLabel);
             menuItem.DropDownItems.Add(ungrouped);
 
-            var groups = _settings.AccountGroups
-                .Select(g => g.Name)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
+            var groups = GetSortedGroupNames();
             if (groups.Count > 0)
             {
                 menuItem.DropDownItems.Add(new ToolStripSeparator());
@@ -357,6 +357,60 @@ namespace TelegramTrayLauncher
             menuItem.DropDownItems.Add(new ToolStripMenuItem("О — открыт, З — закрыт") { Enabled = false });
         }
 
+        private void OpenGroupAccountMenuOnDropDownOpening(object? sender, EventArgs e)
+        {
+            if (sender is not ToolStripMenuItem menuItem)
+            {
+                return;
+            }
+
+            menuItem.DropDownItems.Clear();
+            _settings = _settingsStore.Load();
+
+            var ungrouped = new ToolStripMenuItem(GroupUngroupedLabel);
+            ungrouped.DropDownOpening += (_, __) => PopulateAccountsForGroup(ungrouped, GroupUngroupedLabel);
+            menuItem.DropDownItems.Add(ungrouped);
+
+            var groups = GetSortedGroupNames();
+            if (groups.Count > 0)
+            {
+                menuItem.DropDownItems.Add(new ToolStripSeparator());
+                foreach (var name in groups)
+                {
+                    var item = new ToolStripMenuItem(name);
+                    item.DropDownOpening += (_, __) => PopulateAccountsForGroup(item, name);
+                    menuItem.DropDownItems.Add(item);
+                }
+            }
+        }
+
+        private void PopulateAccountsForGroup(ToolStripMenuItem groupMenuItem, string groupName)
+        {
+            groupMenuItem.DropDownItems.Clear();
+            _settings = _settingsStore.Load();
+            var runningDirs = GetRunningTelegramDirectories();
+            var executables = GetExecutablesForGroup(groupName);
+            if (executables.Count == 0)
+            {
+                groupMenuItem.DropDownItems.Add(new ToolStripMenuItem("Нет доступных аккаунтов") { Enabled = false });
+                return;
+            }
+
+            var scale = NormalizeScale(_settings.Scale);
+            foreach (var exe in executables)
+            {
+                bool isRunning = runningDirs.Contains(exe.Directory);
+                var item = new AccountMenuItem(exe.Name, GetAccountGroupLabel(exe.Name), isRunning);
+                string path = exe.ExePath;
+                string workDir = exe.Directory;
+                item.Click += (_, __) => _processManager.StartSingle(path, workDir, scale);
+                groupMenuItem.DropDownItems.Add(item);
+            }
+
+            groupMenuItem.DropDownItems.Add(new ToolStripSeparator());
+            groupMenuItem.DropDownItems.Add(new ToolStripMenuItem("О — открыт, З — закрыт") { Enabled = false });
+        }
+
         private void OpenSingleDropDownOnMouseWheel(object? sender, MouseEventArgs e)
         {
             if (sender is not ToolStripDropDownMenu dropDownMenu || e.Delta == 0)
@@ -395,6 +449,15 @@ namespace TelegramTrayLauncher
             }
 
             return string.IsNullOrWhiteSpace(state.GroupName) ? GroupUngroupedLabel : state.GroupName;
+        }
+
+        private List<string> GetSortedGroupNames()
+        {
+            return _settings.AccountGroups
+                .Select(g => g.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
         private void OpenAllAccounts()
@@ -700,6 +763,7 @@ namespace TelegramTrayLauncher
                 "\u0412\u0435\u0440\u0441\u0438\u044f: " + version + Environment.NewLine +
                 Environment.NewLine +
                 "\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u044f:" + Environment.NewLine +
+                "\u2022 \u0414\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u043e \u043c\u0435\u043d\u044e \u00ab\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u0433\u0440\u0443\u043f\u043f\u044b\u00bb (\u0433\u0440\u0443\u043f\u043f\u044b \u2192 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u044b)." + Environment.NewLine +
                 "\u2022 \u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u0442\u0440\u0435\u044f: \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044f \u00ab\u0417\u0430\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u044b\u00bb \u0432\u044b\u043d\u0435\u0441\u0435\u043d\u0430 \u0432 \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0431\u0435\u0437 \u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u043a\u0438 UI." + Environment.NewLine +
                 "\u2022 \u0410\u0432\u0442\u043e\u043f\u043e\u0434\u0445\u0432\u0430\u0442 \u043d\u043e\u0432\u044b\u0445 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u0432 \u043f\u0435\u0440\u0435\u0432\u0435\u0434\u0435\u043d \u043d\u0430 \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u044b\u0439 polling (\u0431\u0435\u0437 FileSystemWatcher)." + Environment.NewLine +
                 "\u2022 \u041f\u0440\u0438 \u0432\u044b\u0445\u043e\u0434\u0435 \u0438\u0437 \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440\u0430 Telegram-\u0430\u043a\u043a\u0430\u0443\u043d\u0442\u044b \u0431\u043e\u043b\u044c\u0448\u0435 \u043d\u0435 \u0437\u0430\u043a\u0440\u044b\u0432\u0430\u044e\u0442\u0441\u044f." + Environment.NewLine +
